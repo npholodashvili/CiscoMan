@@ -190,7 +190,7 @@ def page_inventory() -> None:
         "commands via a built-in simulator — full UI works with zero hardware."
     )
     if cdemo2.button("🧪 Add demo devices", disabled=has_demo,
-                     help="Already added" if has_demo else "Seed 4 simulated switches"):
+                     help="Already added" if has_demo else f"Add {len(db.DEMO_DEVICES)} simulated devices (IOS, NX-OS, ASA)"):
         added = db.seed_demo_devices(get_key())
         st.success(f"Added {added} demo device(s).")
         st.rerun()
