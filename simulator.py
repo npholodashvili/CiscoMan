@@ -43,6 +43,7 @@ def _default_state(ip: str, name: str) -> dict:
             "vlan": "1",
             "mode": "access",
             "voice_vlan": "",
+            "poe": "auto",
             "shutdown": False,
             "status": "connected" if connected else "notconnect",
             "speed": "1000" if connected else "auto",
@@ -59,6 +60,10 @@ def _default_state(ip: str, name: str) -> dict:
         "uptime": f"{random.randint(1, 200)} days, {random.randint(0, 23)} hours",
         "interfaces": interfaces,
         "vlans": {1: "default", 10: "DATA", 100: "VOICE"},
+        "svis": {1: {"ip": ip, "mask": "255.255.255.0"}},
+        "tunnels": {},
+        "static_routes": [],
+        "acls": {},
     }
 
 
@@ -134,12 +139,49 @@ def _show_vlan_brief(s: dict) -> str:
 
 def _show_ip_int_brief(s: dict) -> str:
     lines = ["Interface              IP-Address      OK? Method Status                Protocol"]
-    lines.append(f"Vlan1                  {s['mgmt_ip']:<15} YES NVRAM  up                    up")
+    for vid, svi in sorted(s.get("svis", {1: {"ip": s["mgmt_ip"], "mask": "255.255.255.0"}}).items()):
+        lines.append(
+            f"Vlan{vid:<18} {svi['ip']:<15} YES NVRAM  up                    up"
+        )
+    for tid, t in s.get("tunnels", {}).items():
+        lines.append(
+            f"Tunnel{tid:<16} {t.get('ip', 'unassigned'):<15} YES NVRAM  up                    up"
+        )
     for port, d in s["interfaces"].items():
         st = "administratively down" if d["shutdown"] else (
             "up" if d["status"] == "connected" else "down")
         proto = "up" if (not d["shutdown"] and d["status"] == "connected") else "down"
         lines.append(f"{port:<22} unassigned      YES unset  {st:<21} {proto}")
+    return "\n".join(lines)
+
+
+def _show_power_inline(s: dict) -> str:
+    lines = [
+        "Module   Port   Admin    Oper       Power (W)  Device    Class",
+        "------   ----   -----    ----       ---------  ------    -----",
+    ]
+    for port, d in s["interfaces"].items():
+        admin = "auto" if d.get("poe", "auto") == "auto" else "never"
+        oper = "on" if d["status"] == "connected" and admin == "auto" else "off"
+        watts = "15.4" if oper == "on" else "0.0"
+        dev = "Ieee PD" if oper == "on" else "n/a"
+        lines.append(
+            f"1        {_short(port):<6} {admin:<8} {oper:<10} {watts:<10} {dev:<8} 0"
+        )
+    return "\n".join(lines)
+
+
+def _show_ip_route(s: dict) -> str:
+    lines = [
+        "Codes: C - connected, S - static, L - local",
+        "",
+        f"C    192.168.0.0/16 is directly connected, Vlan1",
+        f"C    {s['mgmt_ip'].rsplit('.', 1)[0] + '.0.0'}/24 is directly connected, Vlan1",
+    ]
+    for route in s.get("static_routes", []):
+        lines.append(f"S    {route['network']} {route['mask']} via {route['next_hop']}")
+    for tid in s.get("tunnels", {}):
+        lines.append(f"C    10.255.{tid}.0/30 is directly connected, Tunnel{tid}")
     return "\n".join(lines)
 
 
@@ -200,9 +242,32 @@ def _show_running_config(s: dict) -> str:
                 out.append(f" switchport access vlan {d['vlan']}")
             if d["voice_vlan"]:
                 out.append(f" switchport voice vlan {d['voice_vlan']}")
+        if d.get("poe") == "never":
+            out.append(" power inline never")
+        elif d.get("poe") == "auto":
+            out.append(" power inline auto")
         if d["shutdown"]:
             out.append(" shutdown")
         out.append("!")
+    for vid, svi in s.get("svis", {}).items():
+        if vid == 1 and svi["ip"] == s["mgmt_ip"]:
+            continue
+        out += [f"interface Vlan{vid}", f" ip address {svi['ip']} {svi['mask']}", "!"]
+    for tid, t in s.get("tunnels", {}).items():
+        out += [
+            f"interface Tunnel{tid}",
+            " tunnel mode gre ip",
+            f" ip address {t.get('ip', '')} {t.get('mask', '255.255.255.252')}",
+            f" tunnel source {t.get('source', '')}",
+            f" tunnel destination {t.get('destination', '')}",
+            "!",
+        ]
+    for route in s.get("static_routes", []):
+        out.append(f"ip route {route['network']} {route['mask']} {route['next_hop']}")
+    for acl_name, rules in s.get("acls", {}).items():
+        for rule in rules:
+            out.append(f"ip access-list extended {acl_name}")
+            out.append(f" {rule}")
     out += [
         "interface Vlan1", f" ip address {s['mgmt_ip']} 255.255.255.0", "!",
         "line con 0", "line vty 0 4", " login local", " transport input ssh", "!",
@@ -218,10 +283,12 @@ _SHOW_TABLE = {
     "show vlan brief": _show_vlan_brief,
     "show vlan": _show_vlan_brief,
     "show ip interface brief": _show_ip_int_brief,
+    "show ip route": _show_ip_route,
     "show mac address-table": _show_mac,
     "show mac-address-table": _show_mac,
     "show cdp neighbors detail": _show_cdp,
     "show cdp neighbors": _show_cdp,
+    "show power inline": _show_power_inline,
     "show running-config": _show_running_config,
     "show run": _show_running_config,
 }
@@ -247,6 +314,9 @@ def apply_config(device: dict, lines: list[str]) -> str:
     out_lines = [f"{s['hostname']}#configure terminal",
                  "Enter configuration commands, one per line.  End with CNTL/Z."]
     cur_ifaces: list[str] = []
+    cur_tunnel: str | None = None
+    cur_svi: int | None = None
+    pending_acl: str | None = None
     for raw in lines:
         line = raw.strip()
         if not line:
@@ -254,17 +324,66 @@ def apply_config(device: dict, lines: list[str]) -> str:
         low = line.lower()
         if low.startswith("interface "):
             spec = line.split(None, 1)[1]
-            if spec.lower().startswith("range "):
+            cur_tunnel = None
+            cur_svi = None
+            if spec.lower().startswith("vlan"):
+                try:
+                    cur_svi = int(re.sub(r"[^0-9]", "", spec))
+                    s["svis"].setdefault(cur_svi, {"ip": "", "mask": "255.255.255.0"})
+                    out_lines.append(f"{s['hostname']}(config-if)#")
+                except ValueError:
+                    out_lines.append(f"% Invalid interface {spec}")
+                cur_ifaces = []
+            elif spec.lower().startswith("tunnel"):
+                tid = re.sub(r"[^0-9]", "", spec)
+                cur_tunnel = tid or "0"
+                s["tunnels"].setdefault(cur_tunnel, {})
+                out_lines.append(f"{s['hostname']}(config-if)#")
+                cur_ifaces = []
+            elif spec.lower().startswith("range "):
                 cur_ifaces = _expand_range(s, spec[6:])
+                ctx = "config-if-range" if len(cur_ifaces) > 1 else "config-if"
+                out_lines.append(f"{s['hostname']}({ctx})#")
             else:
                 ni = _normalize_iface(s, spec)
                 cur_ifaces = [ni] if ni else []
-            ctx = "config-if-range" if len(cur_ifaces) > 1 else "config-if"
-            out_lines.append(f"{s['hostname']}({ctx})#" if cur_ifaces
-                             else f"% Invalid interface {spec}")
+                ctx = "config-if-range" if len(cur_ifaces) > 1 else "config-if"
+                out_lines.append(f"{s['hostname']}({ctx})#" if cur_ifaces
+                                 else f"% Invalid interface {spec}")
         elif low.startswith("hostname "):
             s["hostname"] = line.split(None, 1)[1]
             cur_ifaces = []
+            cur_tunnel = cur_svi = None
+        elif low.startswith("ip route "):
+            parts = line.split()
+            if len(parts) >= 5:
+                s["static_routes"].append({
+                    "network": parts[2], "mask": parts[3], "next_hop": parts[4],
+                })
+            cur_ifaces = []
+        elif low.startswith("ip access-list extended "):
+            pending_acl = line.split()[3]
+            s["acls"].setdefault(pending_acl, [])
+            cur_ifaces = []
+        elif pending_acl and (low.startswith("permit ") or low.startswith("deny ")):
+            s["acls"][pending_acl].append(line.strip())
+            pending_acl = None
+        elif cur_svi is not None and low.startswith("ip address "):
+            parts = line.split()
+            if len(parts) >= 4:
+                s["svis"][cur_svi] = {"ip": parts[2], "mask": parts[3]}
+        elif cur_tunnel is not None:
+            if low.startswith("tunnel mode gre"):
+                s["tunnels"][cur_tunnel]["mode"] = "gre"
+            elif low.startswith("tunnel source "):
+                s["tunnels"][cur_tunnel]["source"] = line.split(None, 2)[2]
+            elif low.startswith("tunnel destination "):
+                s["tunnels"][cur_tunnel]["destination"] = line.split(None, 2)[2]
+            elif low.startswith("ip address "):
+                parts = line.split()
+                if len(parts) >= 4:
+                    s["tunnels"][cur_tunnel]["ip"] = parts[2]
+                    s["tunnels"][cur_tunnel]["mask"] = parts[3]
         elif low.startswith("vlan "):
             try:
                 vid = int(line.split()[1])
@@ -301,7 +420,8 @@ def _normalize_iface(s: dict, name: str) -> str | None:
     if name.startswith(_LONG_TYPES):
         s["interfaces"][name] = {
             "desc": "", "vlan": "1", "mode": "access", "voice_vlan": "",
-            "shutdown": False, "status": "notconnect", "speed": "auto", "duplex": "auto",
+            "poe": "auto", "shutdown": False, "status": "notconnect",
+            "speed": "auto", "duplex": "auto",
         }
         return name
     return None
@@ -352,6 +472,10 @@ def _apply_iface_cmd(s: dict, iface: str, low: str, original: str) -> None:
         d["mode"] = "access"
     elif low.startswith("switchport voice vlan "):
         d["voice_vlan"] = low.split()[-1]
+    elif low == "power inline auto":
+        d["poe"] = "auto"
+    elif low == "power inline never":
+        d["poe"] = "never"
     elif low == "shutdown":
         d["shutdown"] = True
         d["status"] = "disabled"

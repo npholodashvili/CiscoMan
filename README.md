@@ -23,54 +23,65 @@ especially those with general networking experience but limited Cisco IOS exposu
 | **Demo mode** | 🧪 Offline simulator — 5 demo switches across 3 locations, stateful config (changes show up in `show run`), no real SSH. |
 | **Backups** | Encrypted `show running-config` snapshots + unified diff. |
 | **Audit** | Every command/config push logged with output and status. |
+| **Coach** | Searchable **cheat sheet**: network terms, plain-English definitions, keyword search, jump to Control Center tasks. |
+| **PoE** | Show PoE status; enable/disable `power inline auto/never` on ports (Action Cards). |
+| **Routing & Tunnels** | SVI IP assignment, static routes, GRE tunnel wizard, show IP route. |
+| **Security** | Extended ACL rule builder (permit/deny lines). |
+
 | **Platforms** | Per-device Netmiko types: `cisco_ios`, `cisco_xe`, `cisco_nxos`, `cisco_xr`, `cisco_asa`, `cisco_s300`. Show commands parsed to tables via TextFSM where templates exist. |
 
-### Control Center workflow (today)
+### Port selection (Control Center)
 
-1. **Choose targets** — filter by Location and Group; select all or individual devices (grouped under 📍 headers).
-2. **Choose an action** — pick a category tab (Diagnostics, Port Config, Switch Config, Custom), then a task.
-3. **Configure** — fill parameters; port tasks use the visual picker instead of typing `GigabitEthernet1/0/1`.
-4. **Review** — toggle CLI Preview to see exact IOS syntax.
-5. **Execute** — confirm config changes; push to all selected devices in parallel.
+- **Checkbox from switch** — load live port list, tick checkboxes (All / Connected only shortcuts).
+- **Build port name** — type + stack/module/port number inputs, range support.
+- **Load VLAN list** — pick VLAN from device for SVI and access-VLAN tasks.
+
+---
+
+## Implementation phases
+
+| Phase | Status | Scope |
+|-------|--------|--------|
+| **1** | Done | Security, scan, inventory, locations, Control Center, demo simulator, backups, audit |
+| **2** | Done | Checkbox port picker, Coach/cheat sheet search, PoE, SVI, static routes |
+| **3** | Started | GRE tunnels, extended ACLs; IPsec/DMVPN wizards planned |
+| **4** | Planned | QoS, spanning-tree, DHCP snooping, 802.1X, NX-OS/ASA subsets |
+
+**North star:** expose essentially all CLI capability through guided UI — built incrementally via Action Cards. Use **Custom** commands for anything not yet templated.
+
+### Control Center workflow
+
+1. **Choose targets** — filter by Location and Group; select devices (grouped under 📍 headers).
+2. **Choose an action** — category tabs (Diagnostics, Port Config, **PoE**, Switch Config, **Routing & Tunnels**, **Security**, Custom).
+3. **Configure** — checkbox port picker, VLAN loader, or manual fields.
+4. **Review** — CLI Preview shows exact IOS syntax.
+5. **Execute** — confirm config changes; concurrent push with per-device output.
+
+Use **Coach** to search terms (e.g. “PoE”, “tunnel”) and jump here pre-filled.
 
 ---
 
 ## PoE switches
 
-**Not implemented yet.** CiscoMan does not currently expose Power over Ethernet (PoE) actions
-such as `power inline auto`, per-port PoE budgets, or `show power inline`.
+**Implemented (Phase 2):** `show power inline`, enable/disable PoE per port via Action Cards
+with checkbox port selection. Demo simulator models PoE state in running-config.
 
-PoE-capable switches (e.g. Catalyst with inline power) will be supported via new **Action
-Cards** in `actions.py` — same pattern as VLAN/trunk tasks: plain-English explanation,
-visual port selection, CLI preview, then push. Typical IOS commands to add:
-
-- `power inline auto` / `power inline never` — enable or disable PoE on a port
-- `show power inline` — see which ports draw power and how much
-- `show power inline police` — PoE budget / allocation (platform-dependent)
-
-If your switch model uses different syntax (IOS vs IOS‑XE vs legacy `power inline`), the
-per-device `device_type` field selects the right Netmiko driver.
+Still planned: PoE budget policing, per-class limits (platform-specific).
 
 ---
 
 ## Roadmap — simpler UI & “learn as you go”
 
-Based on [Cisco SD-WAN UX guidance](https://www.cisco.com/c/en/us/support/docs/routers/sd-wan/222297-quick-start-guide-simplified-configura.html)
-(workflow-based config, smart defaults, minimal knobs) and admin-panel UX research
-([UX Collective — Designing an Admin Panel](https://uxdesign.cc/designing-an-admin-panel-3e77c19870f4)):
+| Principle | Status |
+|-----------|--------|
+| Checkbox port selection | Done |
+| Cheat sheet / Coach with keyword search | Done |
+| Task-first “I want to…” wizard | Planned (next UX pass) |
+| IPsec/DMVPN tunnel wizards | Planned (Phase 3+) |
+| Full CLI parity via Action Cards | Ongoing — add actions in `actions.py` |
 
-| Principle | Planned direction |
-|-----------|-------------------|
-| **Task-first, not CLI-first** | “I want to…” wizard: pick ports (checkbox grid) → pick intent (VLAN / PoE / description / shutdown) → preview → run. Fewer nested controls. |
-| **Visual port selection** | Checkbox grid or switch-face layout loaded from `show interfaces status`, with status/VLAN/PoE columns — replace multiselect where possible. |
-| **Smart defaults** | Pre-fill VLAN IDs, PoE mode, and interface type from live device data when available. |
-| **Contextual help** | Inline explanations on every control (already started via Action Cards). |
-| **Cheat sheet / Coach** | Searchable reference: network admin terms, IOS commands by category, plain-English “what this does”, linked to executable Action Cards. |
-| **Keyword search** | User types e.g. “VLAN”, “PoE”, “trunk” → matching tasks + glossary entries appear together. |
-| **Learning loop** | Optional “Practice mode”: CLI preview required before push; post-run output annotated with term definitions. |
-
-PoE, cheat sheet, and the simplified port-checkbox workflow are **planned** — not in this
-release. See [Extending](#extending) for adding actions today.
+PoE, cheat sheet, and checkbox ports shipped in this release. Next: unified intent wizard
+and deeper tunnel/crypto workflows.
 
 ---
 
@@ -82,6 +93,7 @@ release. See [Extending](#extending) for adding actions today.
 | `database.py` | SQLite schema, encrypted CRUD, locations/groups, audit, snapshots, CSV, demo seed |
 | `network_utils.py` | TCP scanner, Netmiko exec/config, concurrent engine, demo routing |
 | `actions.py` | Action Card catalog — explanations + Jinja2 CLI templates |
+| `cheatsheet.py` | Searchable glossary + keyword index linking terms to Action Cards |
 | `simulator.py` | Offline stateful Cisco IOS simulator for demo/testing |
 | `app.py` | Streamlit UI — Login, Scanner, Inventory, Control Center, Backups, Audit, Settings |
 

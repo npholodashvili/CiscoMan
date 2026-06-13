@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 
 import actions
+import cheatsheet
 import config
 import database as db
 import network_utils as net
@@ -346,13 +347,19 @@ def page_control_center() -> None:
     # --- Action selection via tabs -------------------------------------------
     st.subheader("2. Choose an action")
     st.caption("Pick a category tab, then a task. Settings and a live CLI preview appear below.")
+    goto = st.session_state.pop("goto_action", None)
     tabs = st.tabs([f"{_CAT_ICON.get(c, '•')} {c}" for c in actions.CATEGORIES])
     for tab, cat in zip(tabs, actions.CATEGORIES):
         with tab:
             cat_actions = [a for a in actions.ACTIONS if a.category == cat]
+            radio_key = f"act_radio_{cat}"
+            if goto:
+                match = next((a for a in cat_actions if a.id == goto), None)
+                if match and radio_key not in st.session_state:
+                    st.session_state[radio_key] = match
             action = st.radio(
                 "Task", cat_actions, format_func=lambda a: a.name,
-                key=f"act_radio_{cat}", label_visibility="collapsed",
+                key=radio_key, label_visibility="collapsed",
             )
             st.divider()
             _render_action_ui(action, picked_ids, devices)
@@ -361,7 +368,10 @@ def page_control_center() -> None:
 _CAT_ICON = {
     "Diagnostics": "🔍",
     "Port Config": "🔌",
+    "PoE": "⚡",
     "Switch Config": "🛠️",
+    "Routing & Tunnels": "🛤️",
+    "Security": "🔒",
     "Custom": "⌨️",
 }
 
@@ -395,6 +405,11 @@ def _render_action_ui(action: actions.Action, picked_ids: list, devices: list) -
         for p in action.params:
             if p.kind == "interface":
                 val = _interface_picker(p, action, picked_ids, devices)
+                values[p.key] = val
+                if not val:
+                    incomplete = True
+            elif p.kind == "vlan":
+                val = _vlan_picker(p, action, picked_ids, devices)
                 values[p.key] = val
                 if not val:
                     incomplete = True
@@ -472,6 +487,51 @@ def _interface_picker(param: actions.Param, action: actions.Action,
     return _interface_builder(prefix)
 
 
+def _fetch_vlans(device: dict) -> tuple[bool, list[tuple[int, str]], str]:
+    res = net.run_show_commands(device, ["show vlan brief"], use_textfsm=True)
+    vlans: list[tuple[int, str]] = []
+    for raw in (res.parsed or []):
+        row = {str(k).lower(): v for k, v in raw.items()}
+        vid = row.get("vlan_id") or row.get("vlan")
+        name = row.get("vlan_name") or row.get("name") or ""
+        try:
+            vlans.append((int(vid), str(name)))
+        except (TypeError, ValueError):
+            continue
+    return res.success, vlans, res.error
+
+
+def _vlan_picker(param: actions.Param, action: actions.Action,
+                picked_ids: list, devices: list) -> int:
+    prefix = f"vlan_{action.id}"
+    st.markdown(f"**{param.label}**")
+    candidates = [d for d in devices if d["id"] in picked_ids] or devices
+    src_labels = {f'{d["name"]} ({d["ip"]})': d for d in candidates}
+    csrc, cbtn = st.columns([3, 1])
+    src_label = csrc.selectbox("Load VLAN list from", list(src_labels), key=f"{prefix}_src")
+    src = src_labels[src_label]
+    cache_key = f"{prefix}_vlans_{src['id']}"
+    cbtn.markdown("<div style='height:1.8em'></div>", unsafe_allow_html=True)
+    if cbtn.button("🔄 Load VLANs", key=f"{prefix}_load"):
+        with st.spinner(f"Fetching VLANs from {src['name']} ..."):
+            full = db.get_device_with_credentials(get_key(), src["id"])
+            ok, vlans, err = _fetch_vlans(full)
+        st.session_state[cache_key] = vlans
+        if not ok:
+            st.error(f"Could not read VLANs: {err}")
+        elif not vlans:
+            st.warning("No VLANs parsed — enter ID manually below.")
+    vlans = st.session_state.get(cache_key, [])
+    if vlans:
+        labels = {f"VLAN {v} — {n}" if n else f"VLAN {v}": v for v, n in vlans}
+        pick = st.selectbox("Choose VLAN", list(labels), key=f"{prefix}_pick")
+        return int(labels[pick])
+    return st.number_input(
+        "VLAN ID (manual)", min_value=1, max_value=4094,
+        value=int(param.default or 1), key=f"{prefix}_manual", help=param.help,
+    )
+
+
 def _interface_from_device(prefix: str, picked_ids: list, devices: list) -> str:
     candidates = [d for d in devices if d["id"] in picked_ids] or devices
     src_labels = {f'{d["name"]} ({d["ip"]})': d for d in candidates}
@@ -479,34 +539,53 @@ def _interface_from_device(prefix: str, picked_ids: list, devices: list) -> str:
     src_label = csrc.selectbox("Read ports from", list(src_labels), key=f"{prefix}_src")
     src = src_labels[src_label]
     cache_key = f"{prefix}_ports_{src['id']}"
+    sel_key = f"{prefix}_selected"
     cbtn.markdown("<div style='height:1.8em'></div>", unsafe_allow_html=True)
     if cbtn.button("🔄 Load ports", key=f"{prefix}_load"):
         with st.spinner(f"Reading interfaces from {src['name']} ..."):
             full = db.get_device_with_credentials(get_key(), src["id"])
             ok, ports, err = _fetch_ports(full)
         st.session_state[cache_key] = ports
+        st.session_state[sel_key] = set()
         if not ok:
             st.error(f"Could not read ports: {err}")
         elif not ports:
             st.warning("No interfaces parsed from this device.")
     ports = st.session_state.get(cache_key)
     if not ports:
-        st.caption("Click **Load ports** to list this switch's interfaces.")
+        st.caption("Click **Load ports** — then tick the ports you want.")
         return ""
 
-    def fmt(p: dict) -> str:
+    selected: set[str] = set(st.session_state.get(sel_key, set()))
+    ba, bb, bc = st.columns(3)
+    if ba.button("☑️ All ports", key=f"{prefix}_all"):
+        st.session_state[sel_key] = {p["port"] for p in ports}
+        st.rerun()
+    if bb.button("☑️ Connected only", key=f"{prefix}_conn"):
+        st.session_state[sel_key] = {
+            p["port"] for p in ports if p["status"] in ("connected", "up")
+        }
+        st.rerun()
+    if bc.button("Clear selection", key=f"{prefix}_clr"):
+        st.session_state[sel_key] = set()
+        st.rerun()
+
+    st.caption("Tick each port to include it in this command:")
+    ncols = 4
+    cols = st.columns(ncols)
+    new_sel: set[str] = set()
+    for i, p in enumerate(ports):
         bits = [p["status"] or "?"]
         if p["vlan"]:
             bits.append(f"vlan {p['vlan']}")
-        if p["name"]:
-            bits.append(p["name"])
-        return f'{p["port"]}  —  ' + ", ".join(bits)
-
-    labelmap = {fmt(p): p["port"] for p in ports}
-    chosen = st.multiselect("Select one or more ports", list(labelmap),
-                            key=f"{prefix}_ms",
-                            help="Pick several to apply to all of them at once.")
-    expr = _interface_expr([labelmap[c] for c in chosen])
+        if p.get("name"):
+            bits.append(p["name"][:12])
+        label = f'{p["port"]}  ({", ".join(bits)})'
+        with cols[i % ncols]:
+            if st.checkbox(label, value=p["port"] in selected, key=f"{prefix}_cb_{p['port']}"):
+                new_sel.add(p["port"])
+    st.session_state[sel_key] = new_sel
+    expr = _interface_expr(list(new_sel))
     if expr:
         st.caption(f"Target: `interface {expr}`")
     return expr
@@ -706,6 +785,56 @@ def page_audit() -> None:
         st.rerun()
 
 
+def page_coach() -> None:
+    st.header("📚 Coach & Cheat Sheet")
+    st.caption(
+        "Search network terms and tasks — learn what they mean, then jump straight "
+        "to Control Center to run them."
+    )
+    query = st.text_input(
+        "Search", placeholder="Try: VLAN, PoE, GRE tunnel, trunk, ACL, SVI…",
+        key="cheat_search",
+    )
+    hits = cheatsheet.search(query)
+    if query and not hits["glossary"] and not hits["actions"]:
+        st.warning("No matches — try another keyword or browse all terms below.")
+
+    if hits["glossary"]:
+        st.subheader("Terms & concepts")
+        for entry in hits["glossary"]:
+            with st.expander(f"**{entry.term}** ({entry.category})"):
+                st.write(entry.definition)
+                if entry.action_ids:
+                    st.markdown("**Related tasks:**")
+                    for aid in entry.action_ids:
+                        if aid not in actions.ACTIONS_BY_ID:
+                            continue
+                        act = actions.get_action(aid)
+                        c1, c2 = st.columns([3, 1])
+                        c1.markdown(f"- **{act.name}** ({act.category})")
+                        if c2.button("Open in Control Center", key=f"goto_{aid}_{entry.term[:8]}"):
+                            st.session_state["goto_action"] = aid
+                            st.session_state["sidebar_nav"] = "Control Center"
+                            st.rerun()
+
+    if hits["actions"]:
+        st.subheader("Runnable tasks")
+        for act in hits["actions"]:
+            with st.expander(f"{act.name} — {act.category}"):
+                st.info(act.explanation)
+                if st.button("Configure in Control Center", key=f"goto_act_{act.id}"):
+                    st.session_state["goto_action"] = act.id
+                    st.session_state["sidebar_nav"] = "Control Center"
+                    st.rerun()
+
+    if not query:
+        st.subheader("Browse by topic")
+        for cat in cheatsheet.categories():
+            st.markdown(f"**{cat}**")
+            for entry in [e for e in cheatsheet.GLOSSARY if e.category == cat]:
+                st.markdown(f"- **{entry.term}** — {entry.definition[:120]}…")
+
+
 def page_settings() -> None:
     st.header("⚙️ Settings")
 
@@ -764,10 +893,10 @@ def main() -> None:
         m1, m2 = st.columns(2)
         m1.metric("Devices", len(devs))
         m2.metric("Locations", len(db.list_locations()))
-        page = st.radio(
-            "Navigate",
-            ["Scanner", "Inventory", "Control Center", "Backups", "Audit", "Settings"],
-        )
+        nav_options = ["Scanner", "Inventory", "Control Center", "Coach", "Backups", "Audit", "Settings"]
+        if "sidebar_nav" not in st.session_state:
+            st.session_state["sidebar_nav"] = "Scanner"
+        page = st.radio("Navigate", nav_options, key="sidebar_nav")
         st.divider()
         if not net.NETMIKO_AVAILABLE:
             st.error("Netmiko not installed — SSH actions disabled.")
@@ -779,6 +908,7 @@ def main() -> None:
         "Scanner": page_scanner,
         "Inventory": page_inventory,
         "Control Center": page_control_center,
+        "Coach": page_coach,
         "Backups": page_backups,
         "Audit": page_audit,
         "Settings": page_settings,

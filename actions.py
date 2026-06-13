@@ -134,6 +134,28 @@ ACTIONS: list[Action] = [
         ),
         template="show version",
     ),
+    Action(
+        id="show_ip_route",
+        name="Show IP Routing Table",
+        category="Diagnostics",
+        kind="show",
+        explanation=(
+            "Lists routes the switch knows — connected, static, and learned. "
+            "Use it to verify default gateways and tunnel destinations."
+        ),
+        template="show ip route",
+    ),
+    Action(
+        id="show_power_inline",
+        name="Show PoE Status",
+        category="Diagnostics",
+        kind="show",
+        explanation=(
+            "Shows Power over Ethernet status per port: whether PoE is on, "
+            "power draw in watts, and device class. Requires PoE-capable hardware."
+        ),
+        template="show power inline",
+    ),
     # ---- Port configuration (config) ----------------------------------------
     Action(
         id="set_access_vlan",
@@ -242,7 +264,41 @@ ACTIONS: list[Action] = [
         save_after=True,
         danger=True,
     ),
-    # ---- VLAN / switch management (config) ----------------------------------
+    # ---- PoE (config + already has show in Diagnostics) ----------------------
+    Action(
+        id="poe_enable",
+        name="Enable PoE on Port(s)",
+        category="PoE",
+        kind="config",
+        explanation=(
+            "Turns on Power over Ethernet for the selected port(s). The switch "
+            "will negotiate power class with the connected device (phone, AP, camera). "
+            "Requires a PoE-capable switch and `power inline auto`."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            "power inline auto"
+        ),
+        params=[Param("interface", "Port(s)", "interface")],
+        save_after=True,
+    ),
+    Action(
+        id="poe_disable",
+        name="Disable PoE on Port(s)",
+        category="PoE",
+        kind="config",
+        explanation=(
+            "Stops delivering power on the port (`power inline never`). Use when "
+            "a port must never power a device even if something is plugged in."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            "power inline never"
+        ),
+        params=[Param("interface", "Port(s)", "interface")],
+        save_after=True,
+        danger=True,
+    ),
     Action(
         id="create_vlan",
         name="Create VLAN",
@@ -286,6 +342,107 @@ ACTIONS: list[Action] = [
         ),
         template="",  # handled via save flag; no config lines needed
         save_after=True,
+    ),
+    Action(
+        id="set_svi_ip",
+        name="Assign IP to VLAN (SVI)",
+        category="Switch Config",
+        kind="config",
+        explanation=(
+            "Creates or updates a Switched Virtual Interface (interface VlanX) with "
+            "an IP address. This is how a switch becomes the default gateway "
+            "for devices on that VLAN."
+        ),
+        template=(
+            "interface Vlan{{ vlan }}\n"
+            "ip address {{ ip }} {{ mask }}"
+        ),
+        params=[
+            Param("vlan", "VLAN ID", "vlan", default=1,
+                  help="VLAN that gets the IP (creates SVI if missing)."),
+            Param("ip", "IP address", "text", placeholder="192.168.10.1"),
+            Param("mask", "Subnet mask", "text", default="255.255.255.0"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    # ---- Routing & Tunnels ---------------------------------------------------
+    Action(
+        id="static_route",
+        name="Add Static Route",
+        category="Routing & Tunnels",
+        kind="config",
+        explanation=(
+            "Installs a static route: traffic to the destination network is "
+            "forwarded to the next-hop IP (usually another router on a directly "
+            "connected segment)."
+        ),
+        template="ip route {{ network }} {{ mask }} {{ next_hop }}",
+        params=[
+            Param("network", "Destination network", "text", placeholder="10.0.0.0"),
+            Param("mask", "Destination mask", "text", default="255.255.255.0"),
+            Param("next_hop", "Next-hop IP", "text", placeholder="192.168.1.254"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    Action(
+        id="gre_tunnel",
+        name="Create GRE Tunnel",
+        category="Routing & Tunnels",
+        kind="config",
+        explanation=(
+            "Builds a GRE tunnel interface — a virtual point-to-point link over "
+            "an IP network. Specify tunnel number, inner IP, physical source "
+            "interface, and remote peer IP. Often combined with IPsec (not in this "
+            "wizard) for encryption."
+        ),
+        template=(
+            "interface Tunnel{{ tunnel_id }}\n"
+            " tunnel mode gre ip\n"
+            " ip address {{ tunnel_ip }} {{ tunnel_mask }}\n"
+            " tunnel source {{ source }}\n"
+            " tunnel destination {{ destination }}"
+        ),
+        params=[
+            Param("tunnel_id", "Tunnel number", "int", default=0),
+            Param("tunnel_ip", "Tunnel IP (this end)", "text", placeholder="10.255.0.1"),
+            Param("tunnel_mask", "Tunnel mask", "text", default="255.255.255.252"),
+            Param("source", "Source interface", "text", placeholder="GigabitEthernet1/0/24",
+                  help="Local interface toward the remote site."),
+            Param("destination", "Remote peer IP", "text", placeholder="203.0.113.50",
+                  help="Public or routable IP of the far-end router."),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    # ---- Security -----------------------------------------------------------
+    Action(
+        id="extended_acl",
+        name="Add Extended ACL Rule",
+        category="Security",
+        kind="config",
+        explanation=(
+            "Adds one line to an extended IP access-list. Extended ACLs filter "
+            "traffic by source/destination. Rules are evaluated in order; "
+            "implicit deny-all at the end."
+        ),
+        template=(
+            "ip access-list extended {{ acl_name }}\n"
+            "{{ permit_deny }} {{ protocol }} {{ source }} {{ destination }}"
+        ),
+        params=[
+            Param("acl_name", "ACL name", "text", placeholder="BLOCK_GUEST"),
+            Param("permit_deny", "Action", "select", default="deny",
+                  options=["permit", "deny"]),
+            Param("protocol", "Protocol", "select", default="ip",
+                  options=["ip", "tcp", "udp", "icmp"]),
+            Param("source", "Source", "text", default="any",
+                  placeholder="any or 192.168.1.0 0.0.0.255"),
+            Param("destination", "Destination", "text", default="any"),
+        ],
+        save_after=True,
+        danger=True,
     ),
     # ---- Custom escape hatch -------------------------------------------------
     Action(
