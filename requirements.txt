@@ -1,0 +1,6 @@
+streamlit>=1.36
+netmiko>=4.3
+cryptography>=42.0
+jinja2>=3.1
+pandas>=2.2
+ntc-templates>=4.0
