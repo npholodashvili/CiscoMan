@@ -156,6 +156,39 @@ ACTIONS: list[Action] = [
         ),
         template="show power inline",
     ),
+    Action(
+        id="show_stp",
+        name="Show Spanning Tree",
+        category="Diagnostics",
+        kind="show",
+        explanation=(
+            "Displays spanning-tree state — which VLAN is root, port roles (designated, "
+            "root, blocked). Use before/after changing portfast or BPDU guard."
+        ),
+        template="show spanning-tree summary",
+    ),
+    Action(
+        id="show_dhcp_snoop",
+        name="Show DHCP Snooping",
+        category="Diagnostics",
+        kind="show",
+        explanation=(
+            "Lists DHCP snooping bindings and trusted ports. Confirms snooping is "
+            "active and which MAC/IP pairs were learned."
+        ),
+        template="show ip dhcp snooping",
+    ),
+    Action(
+        id="show_crypto",
+        name="Show Crypto / VPN Status",
+        category="Diagnostics",
+        kind="show",
+        explanation=(
+            "Shows IPsec security associations, ISAKMP peers, and crypto map status "
+            "after bringing up site-to-site VPNs."
+        ),
+        template="show crypto session\nshow crypto isakmp sa",
+    ),
     # ---- Port configuration (config) ----------------------------------------
     Action(
         id="set_access_vlan",
@@ -413,6 +446,150 @@ ACTIONS: list[Action] = [
             Param("destination", "Remote peer IP", "text", placeholder="203.0.113.50",
                   help="Public or routable IP of the far-end router."),
         ],
+        save_after=True,
+        danger=True,
+    ),
+    Action(
+        id="ipsec_site_to_site",
+        name="IPsec Site-to-Site VPN",
+        category="Routing & Tunnels",
+        kind="config",
+        explanation=(
+            "Full IOS site-to-site IPsec wizard: ISAKMP policy + pre-shared key, "
+            "IPsec transform-set, crypto map on a physical interface, and ACL "
+            "matching traffic to encrypt. Pair with an existing GRE tunnel or route "
+            "to remote networks. Requires reachable peer and matching config on far end."
+        ),
+        template=(
+            "crypto isakmp policy {{ policy_name }}\n"
+            " encr {{ encryption }}\n"
+            " authentication pre-share\n"
+            " group {{ dh_group }}\n"
+            "crypto isakmp key {{ key_name }} address {{ peer_ip }} key {{ psk }}\n"
+            "crypto ipsec transform-set {{ transform_name }} esp-aes esp-sha-hmac\n"
+            "crypto map {{ map_name }} {{ map_seq }} ipsec-isakmp\n"
+            " set peer {{ peer_ip }}\n"
+            " set transform-set {{ transform_name }}\n"
+            " set security-association lifetime seconds {{ sa_lifetime }}\n"
+            " match address {{ acl_name }}\n"
+            "access-list {{ acl_name }} permit ip {{ local_net }} {{ local_wild }} {{ remote_net }} {{ remote_wild }}\n"
+            "interface {{ phy_interface }}\n"
+            " crypto map {{ map_name }}"
+        ),
+        params=[
+            Param("policy_name", "ISAKMP policy name", "text", default="VPN-POLICY"),
+            Param("key_name", "ISAKMP key name", "text", default="VPN-KEY"),
+            Param("psk", "Pre-shared key", "text", placeholder="long-random-secret"),
+            Param("peer_ip", "Peer router IP", "text", placeholder="203.0.113.50"),
+            Param("encryption", "Encryption", "select", default="aes 256",
+                  options=["aes 128", "aes 256", "3des"]),
+            Param("dh_group", "DH group", "select", default="2", options=["2", "5", "14"]),
+            Param("transform_name", "Transform-set name", "text", default="VPN-TS"),
+            Param("map_name", "Crypto map name", "text", default="VPN-MAP"),
+            Param("map_seq", "Crypto map sequence", "int", default=10),
+            Param("sa_lifetime", "SA lifetime (seconds)", "int", default=3600),
+            Param("acl_name", "ACL name", "text", default="VPN-ACL"),
+            Param("local_net", "Local network", "text", default="10.0.0.0"),
+            Param("local_wild", "Local wildcard", "text", default="0.0.255.255"),
+            Param("remote_net", "Remote network", "text", default="172.16.0.0"),
+            Param("remote_wild", "Remote wildcard", "text", default="0.0.255.255"),
+            Param("phy_interface", "Physical interface", "text",
+                  placeholder="GigabitEthernet1/0/24"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    # ---- Layer 2 (STP, DHCP snooping, QoS) --------------------------------
+    Action(
+        id="enable_dhcp_snooping",
+        name="Enable DHCP Snooping (global)",
+        category="Layer 2",
+        kind="config",
+        explanation=(
+            "Turns on DHCP snooping switch-wide. Untrusted ports cannot originate "
+            "DHCP offers — mitigates rogue DHCP servers. Pair with trust on upl ports."
+        ),
+        template="ip dhcp snooping",
+        save_after=True,
+    ),
+    Action(
+        id="set_dhcp_snoop_trust",
+        name="Trust Port (DHCP Snooping)",
+        category="Layer 2",
+        kind="config",
+        explanation=(
+            "Marks a port as trusted for DHCP snooping — allows DHCP messages from "
+            "devices on that port (typical on upl to another switch)."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            "ip dhcp snooping trust"
+        ),
+        params=[Param("interface", "Port(s)", "interface")],
+        save_after=True,
+    ),
+    Action(
+        id="set_portfast",
+        name="Enable Portfast",
+        category="Layer 2",
+        kind="config",
+        explanation=(
+            "spanning-tree portfast skips listening/learning on access ports so "
+            "end devices come up faster. Never use on trunk/uplink ports."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            "spanning-tree portfast"
+        ),
+        params=[Param("interface", "Port(s)", "interface")],
+        save_after=True,
+    ),
+    Action(
+        id="set_bpduguard",
+        name="Enable BPDU Guard",
+        category="Layer 2",
+        kind="config",
+        explanation=(
+            "spanning-tree bpduguard enable shuts the port if it receives BPDUs — "
+            "blocks unauthorized switches/hubs on access ports."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            "spanning-tree bpduguard enable"
+        ),
+        params=[Param("interface", "Port(s)", "interface")],
+        save_after=True,
+    ),
+    Action(
+        id="set_trust_dscp",
+        name="Trust QoS DSCP",
+        category="Layer 2",
+        kind="config",
+        explanation=(
+            "mls qos trust dscp honors Differentiated Services Code Point markings "
+            "on incoming frames so voice/video traffic can be prioritized."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            "mls qos trust dscp"
+        ),
+        params=[Param("interface", "Port(s)", "interface")],
+        save_after=True,
+    ),
+    Action(
+        id="dot1x_port",
+        name="Enable 802.1X Port Control",
+        category="Security",
+        kind="config",
+        explanation=(
+            "dot1x port-control auto requires clients to authenticate (via RADIUS) "
+            "before the port forwards traffic. Requires AAA/RADIUS configured."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            "dot1x port-control auto"
+        ),
+        params=[Param("interface", "Port(s)", "interface")],
         save_after=True,
         danger=True,
     ),

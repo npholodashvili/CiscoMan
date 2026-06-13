@@ -25,8 +25,10 @@ especially those with general networking experience but limited Cisco IOS exposu
 | **Audit** | Every command/config push logged with output and status. |
 | **Coach** | Searchable **cheat sheet**: network terms, plain-English definitions, keyword search, jump to Control Center tasks. |
 | **PoE** | Show PoE status; enable/disable `power inline auto/never` on ports (Action Cards). |
-| **Routing & Tunnels** | SVI IP assignment, static routes, GRE tunnel wizard, show IP route. |
-| **Security** | Extended ACL rule builder (permit/deny lines). |
+| **Routing & Tunnels** | SVI, static routes, GRE tunnel, **IPsec site-to-site wizard**, show IP/crypto route. |
+| **Layer 2** | DHCP snooping, portfast, BPDU guard, QoS trust DSCP, show STP/DHCP snooping. |
+| **Security** | Extended ACL rules, **802.1X** port-control auto. |
+| **Quick Wizard** | Simplest flow: pick devices → tick ports → choose intent → run. |
 
 | **Platforms** | Per-device Netmiko types: `cisco_ios`, `cisco_xe`, `cisco_nxos`, `cisco_xr`, `cisco_asa`, `cisco_s300`. Show commands parsed to tables via TextFSM where templates exist. |
 
@@ -44,8 +46,8 @@ especially those with general networking experience but limited Cisco IOS exposu
 |-------|--------|--------|
 | **1** | Done | Security, scan, inventory, locations, Control Center, demo simulator, backups, audit |
 | **2** | Done | Checkbox port picker, Coach/cheat sheet search, PoE, SVI, static routes |
-| **3** | Started | GRE tunnels, extended ACLs; IPsec/DMVPN wizards planned |
-| **4** | Planned | QoS, spanning-tree, DHCP snooping, 802.1X, NX-OS/ASA subsets |
+| **3** | Done | GRE tunnels, IPsec site-to-site wizard, extended ACLs, Quick Wizard |
+| **4** | Done | STP portfast/BPDU guard, DHCP snooping, QoS trust DSCP, 802.1X, Layer 2 diagnostics |
 
 **North star:** expose essentially all CLI capability through guided UI — built incrementally via Action Cards. Use **Custom** commands for anything not yet templated.
 
@@ -76,9 +78,10 @@ Still planned: PoE budget policing, per-class limits (platform-specific).
 |-----------|--------|
 | Checkbox port selection | Done |
 | Cheat sheet / Coach with keyword search | Done |
-| Task-first “I want to…” wizard | Planned (next UX pass) |
-| IPsec/DMVPN tunnel wizards | Planned (Phase 3+) |
+| Task-first “I want to…” wizard | Done (Quick Wizard page) |
+| IPsec/DMVPN tunnel wizards | IPsec done; DMVPN planned |
 | Full CLI parity via Action Cards | Ongoing — add actions in `actions.py` |
+| NX-OS / ASA platform packs | Planned |
 
 PoE, cheat sheet, and checkbox ports shipped in this release. Next: unified intent wizard
 and deeper tunnel/crypto workflows.
@@ -93,6 +96,7 @@ and deeper tunnel/crypto workflows.
 | `database.py` | SQLite schema, encrypted CRUD, locations/groups, audit, snapshots, CSV, demo seed |
 | `network_utils.py` | TCP scanner, Netmiko exec/config, concurrent engine, demo routing |
 | `actions.py` | Action Card catalog — explanations + Jinja2 CLI templates |
+| `wizard.py` | Quick Wizard intent definitions (maps to Action Cards) |
 | `cheatsheet.py` | Searchable glossary + keyword index linking terms to Action Cards |
 | `simulator.py` | Offline stateful Cisco IOS simulator for demo/testing |
 | `app.py` | Streamlit UI — Login, Scanner, Inventory, Control Center, Backups, Audit, Settings |

@@ -17,6 +17,7 @@ import cheatsheet
 import config
 import database as db
 import network_utils as net
+import wizard
 
 st.set_page_config(page_title="CiscoMan", page_icon="🛰️", layout="wide")
 
@@ -312,36 +313,7 @@ def page_control_center() -> None:
 
     # --- Target selection -----------------------------------------------------
     st.subheader("1. Choose targets")
-    colf1, colf2, colf3 = st.columns([2, 2, 2])
-    loc_filter = colf1.selectbox("Location", ["(all)"] + db.list_locations())
-    groups = db.list_groups(location=None if loc_filter == "(all)" else loc_filter)
-    group_filter = colf2.selectbox("Group", ["(all)"] + groups)
-    pool = [
-        d for d in devices
-        if (loc_filter == "(all)" or d["location"] == loc_filter)
-        and (group_filter == "(all)" or d["group_name"] == group_filter)
-    ]
-    select_all = colf3.checkbox(f"Select all shown ({len(pool)})")
-
-    picked_ids = []
-    if not pool:
-        st.info("No devices match this location/group filter.")
-    # Group the checkboxes visually by location for clarity.
-    by_location: dict[str, list[dict]] = {}
-    for d in pool:
-        by_location.setdefault(d["location"] or "No location", []).append(d)
-
-    for loc, members in by_location.items():
-        st.markdown(f"**📍 {loc}**")
-        grid = st.columns(3)
-        for i, d in enumerate(members):
-            with grid[i % 3]:
-                tag = " 🧪" if d.get("is_demo") else ""
-                grp = f' · {d["group_name"]}' if d["group_name"] else ""
-                checked = st.checkbox(f'{d["name"]}{tag}  ·  {d["ip"]}{grp}',
-                                      key=f"tgt_{d['id']}", value=select_all)
-                if checked:
-                    picked_ids.append(d["id"])
+    picked_ids = _render_target_picker(devices, "cc")
     st.caption(f"{len(picked_ids)} device(s) selected.")
 
     # --- Action selection via tabs -------------------------------------------
@@ -371,9 +343,44 @@ _CAT_ICON = {
     "PoE": "⚡",
     "Switch Config": "🛠️",
     "Routing & Tunnels": "🛤️",
+    "Layer 2": "🔗",
     "Security": "🔒",
     "Custom": "⌨️",
 }
+
+
+def _render_target_picker(devices: list[dict], key_prefix: str = "tgt") -> list[int]:
+    """Location/group filters + checkboxes; returns selected device ids."""
+    colf1, colf2, colf3 = st.columns([2, 2, 2])
+    loc_filter = colf1.selectbox(
+        "Location", ["(all)"] + db.list_locations(), key=f"{key_prefix}_loc",
+    )
+    groups = db.list_groups(location=None if loc_filter == "(all)" else loc_filter)
+    group_filter = colf2.selectbox("Group", ["(all)"] + groups, key=f"{key_prefix}_grp")
+    pool = [
+        d for d in devices
+        if (loc_filter == "(all)" or d["location"] == loc_filter)
+        and (group_filter == "(all)" or d["group_name"] == group_filter)
+    ]
+    select_all = colf3.checkbox(f"Select all shown ({len(pool)})", key=f"{key_prefix}_all")
+    picked_ids: list[int] = []
+    if pool:
+        by_location: dict[str, list[dict]] = {}
+        for d in pool:
+            by_location.setdefault(d["location"] or "No location", []).append(d)
+        for loc, members in by_location.items():
+            st.markdown(f"**📍 {loc}**")
+            grid = st.columns(3)
+            for i, d in enumerate(members):
+                with grid[i % 3]:
+                    tag = " 🧪" if d.get("is_demo") else ""
+                    grp = f' · {d["group_name"]}' if d["group_name"] else ""
+                    if st.checkbox(
+                        f'{d["name"]}{tag}  ·  {d["ip"]}{grp}',
+                        key=f"{key_prefix}_{d['id']}", value=select_all,
+                    ):
+                        picked_ids.append(d["id"])
+    return picked_ids
 
 
 def _build_cli_lines(action: actions.Action, values: dict) -> list[str]:
@@ -785,6 +792,72 @@ def page_audit() -> None:
         st.rerun()
 
 
+def page_quick_wizard() -> None:
+    st.header("⚡ Quick Wizard")
+    st.caption(
+        "Simplest path: **devices → ports → intent → run**. "
+        "No CLI knowledge required — preview shows exact commands."
+    )
+    devices = db.list_devices()
+    if not devices:
+        st.info("Add devices first (Scanner or Inventory).")
+        return
+
+    st.subheader("1. Targets")
+    picked_ids = _render_target_picker(devices, "qw")
+    st.caption(f"{len(picked_ids)} device(s) selected.")
+
+    st.subheader("2. Ports")
+    if not picked_ids:
+        st.warning("Select at least one device above.")
+    iface_expr = _interface_from_device("qw", picked_ids, devices) if picked_ids else ""
+
+    st.subheader("3. What to do")
+    intent = st.radio(
+        "Choose task",
+        wizard.INTENTS,
+        format_func=lambda i: i.label,
+        key="qw_intent",
+    )
+    st.info(f"**What this does:** {intent.explanation}")
+
+    values: dict = {}
+    if "vlan" in intent.extra_params:
+        values["vlan"] = st.number_input("Access VLAN ID", min_value=1, max_value=4094,
+                                         value=1, key="qw_vlan")
+    if "description" in intent.extra_params:
+        values["description"] = st.text_input("Description", key="qw_desc",
+                                            placeholder="Printer - Floor 2")
+
+    cli_lines = None
+    action = None
+    if iface_expr:
+        try:
+            action, cli_lines = wizard.build_cli(intent.id, iface_expr, values)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Could not build command: {exc}")
+
+    save_after = False
+    if action and action.kind == "config" and action.save_after:
+        save_after = st.checkbox("Save to startup-config (write memory)", key="qw_save")
+
+    if cli_lines is not None:
+        st.subheader("4. Preview")
+        preview = _preview_text(action, cli_lines, save_after) if action else ""
+        st.code(preview, language="bash")
+
+    st.subheader("5. Run")
+    can_run = bool(picked_ids) and cli_lines and action
+    if action and action.kind == "config" and picked_ids:
+        can_run = can_run and st.checkbox(
+            f"I understand this will be sent to **{len(picked_ids)}** device(s).",
+            key="qw_confirm",
+        )
+    label = f"🚀 Apply to {len(picked_ids)} device(s)" if picked_ids else "Select devices first"
+    if st.button(label, type="primary", disabled=not can_run, key="qw_run"):
+        _execute(action, cli_lines, save_after, picked_ids)
+
+
 def page_coach() -> None:
     st.header("📚 Coach & Cheat Sheet")
     st.caption(
@@ -893,7 +966,10 @@ def main() -> None:
         m1, m2 = st.columns(2)
         m1.metric("Devices", len(devs))
         m2.metric("Locations", len(db.list_locations()))
-        nav_options = ["Scanner", "Inventory", "Control Center", "Coach", "Backups", "Audit", "Settings"]
+        nav_options = [
+            "Scanner", "Inventory", "Quick Wizard", "Control Center",
+            "Coach", "Backups", "Audit", "Settings",
+        ]
         if "sidebar_nav" not in st.session_state:
             st.session_state["sidebar_nav"] = "Scanner"
         page = st.radio("Navigate", nav_options, key="sidebar_nav")
@@ -907,6 +983,7 @@ def main() -> None:
     pages = {
         "Scanner": page_scanner,
         "Inventory": page_inventory,
+        "Quick Wizard": page_quick_wizard,
         "Control Center": page_control_center,
         "Coach": page_coach,
         "Backups": page_backups,

@@ -48,6 +48,11 @@ def _default_state(ip: str, name: str) -> dict:
             "status": "connected" if connected else "notconnect",
             "speed": "1000" if connected else "auto",
             "duplex": "a-full" if connected else "auto",
+            "portfast": False,
+            "bpduguard": False,
+            "dhcp_trust": False,
+            "trust_dscp": False,
+            "dot1x": False,
         }
     interfaces["GigabitEthernet1/0/24"] = {
         "desc": "Uplink to Core", "vlan": "trunk", "mode": "trunk", "voice_vlan": "",
@@ -64,6 +69,8 @@ def _default_state(ip: str, name: str) -> dict:
         "tunnels": {},
         "static_routes": [],
         "acls": {},
+        "dhcp_snooping": False,
+        "crypto_maps": {},
     }
 
 
@@ -155,6 +162,39 @@ def _show_ip_int_brief(s: dict) -> str:
     return "\n".join(lines)
 
 
+def _show_dhcp_snooping(s: dict) -> str:
+    lines = [
+        "DHCP snooping is " + ("enabled" if s.get("dhcp_snooping") else "disabled"),
+        "",
+        "Trusted ports:",
+    ]
+    for port, d in s["interfaces"].items():
+        if d.get("dhcp_trust"):
+            lines.append(f"  {_short(port)}")
+    if len(lines) == 3:
+        lines.append("  (none)")
+    return "\n".join(lines)
+
+
+def _show_crypto(s: dict) -> str:
+    lines = ["Crypto ISAKMP SA:", ""]
+    for name, cm in s.get("crypto_maps", {}).items():
+        lines.append(f"Map {name}: peer {cm.get('peer', '?')} transform {cm.get('transform', '?')}")
+    if len(lines) == 2:
+        lines.append("(no security associations)")
+    return "\n".join(lines)
+
+
+def _show_stp(s: dict) -> str:
+    return (
+        "VLAN0001\n"
+        "  Root this switch for VLAN0001\n"
+        "  Gi1/0/24    Desg FWD  P2\n"
+        "  Gi1/0/1     Desg FWD  P2\n"
+        "(simulated summary)"
+    )
+
+
 def _show_power_inline(s: dict) -> str:
     lines = [
         "Module   Port   Admin    Oper       Power (W)  Device    Class",
@@ -242,6 +282,18 @@ def _show_running_config(s: dict) -> str:
                 out.append(f" switchport access vlan {d['vlan']}")
             if d["voice_vlan"]:
                 out.append(f" switchport voice vlan {d['voice_vlan']}")
+        if d.get("portfast"):
+            out.append(" spanning-tree portfast")
+        if d.get("bpduguard"):
+            out.append(" spanning-tree bpduguard enable")
+        if d.get("dhcp_trust"):
+            out.append(" ip dhcp snooping trust")
+        if d.get("trust_dscp"):
+            out.append(" mls qos trust dscp")
+        if d.get("dot1x"):
+            out.append(" dot1x port-control auto")
+        if d.get("crypto_map"):
+            out.append(f" crypto map {d['crypto_map']}")
         if d.get("poe") == "never":
             out.append(" power inline never")
         elif d.get("poe") == "auto":
@@ -264,6 +316,8 @@ def _show_running_config(s: dict) -> str:
         ]
     for route in s.get("static_routes", []):
         out.append(f"ip route {route['network']} {route['mask']} {route['next_hop']}")
+    if s.get("dhcp_snooping"):
+        out.insert(4, "ip dhcp snooping")
     for acl_name, rules in s.get("acls", {}).items():
         for rule in rules:
             out.append(f"ip access-list extended {acl_name}")
@@ -289,6 +343,10 @@ _SHOW_TABLE = {
     "show cdp neighbors detail": _show_cdp,
     "show cdp neighbors": _show_cdp,
     "show power inline": _show_power_inline,
+    "show spanning-tree summary": _show_stp,
+    "show ip dhcp snooping": _show_dhcp_snooping,
+    "show crypto session": _show_crypto,
+    "show crypto isakmp sa": _show_crypto,
     "show running-config": _show_running_config,
     "show run": _show_running_config,
 }
@@ -384,6 +442,29 @@ def apply_config(device: dict, lines: list[str]) -> str:
                 if len(parts) >= 4:
                     s["tunnels"][cur_tunnel]["ip"] = parts[2]
                     s["tunnels"][cur_tunnel]["mask"] = parts[3]
+        elif low == "ip dhcp snooping":
+            s["dhcp_snooping"] = True
+            cur_ifaces = []
+        elif low.startswith("crypto map ") and cur_ifaces:
+            map_name = line.split()[2]
+            s["crypto_maps"][map_name] = s["crypto_maps"].get(map_name, {})
+            for ifc in cur_ifaces:
+                s["interfaces"][ifc]["crypto_map"] = map_name
+            cur_ifaces = []
+        elif low.startswith("crypto isakmp policy "):
+            cur_ifaces = []
+        elif low.startswith("crypto map "):
+            parts = line.split()
+            if len(parts) >= 3:
+                s["crypto_maps"][parts[2]] = {"peer": "", "transform": ""}
+        elif low.startswith("set peer "):
+            peer = line.split()[2]
+            if s["crypto_maps"]:
+                list(s["crypto_maps"].values())[-1]["peer"] = peer
+        elif low.startswith("set transform-set "):
+            ts = line.split()[2]
+            if s["crypto_maps"]:
+                list(s["crypto_maps"].values())[-1]["transform"] = ts
         elif low.startswith("vlan "):
             try:
                 vid = int(line.split()[1])
@@ -422,6 +503,8 @@ def _normalize_iface(s: dict, name: str) -> str | None:
             "desc": "", "vlan": "1", "mode": "access", "voice_vlan": "",
             "poe": "auto", "shutdown": False, "status": "notconnect",
             "speed": "auto", "duplex": "auto",
+            "portfast": False, "bpduguard": False, "dhcp_trust": False,
+            "trust_dscp": False, "dot1x": False, "crypto_map": "",
         }
         return name
     return None
@@ -476,6 +559,18 @@ def _apply_iface_cmd(s: dict, iface: str, low: str, original: str) -> None:
         d["poe"] = "auto"
     elif low == "power inline never":
         d["poe"] = "never"
+    elif low == "dot1x port-control auto":
+        d["dot1x"] = True
+    elif low == "spanning-tree portfast":
+        d["portfast"] = True
+    elif low == "spanning-tree bpduguard enable":
+        d["bpduguard"] = True
+    elif low == "ip dhcp snooping trust":
+        d["dhcp_trust"] = True
+    elif low == "mls qos trust dscp":
+        d["trust_dscp"] = True
+    elif low.startswith("crypto map "):
+        d["crypto_map"] = line.split()[2]
     elif low == "shutdown":
         d["shutdown"] = True
         d["status"] = "disabled"

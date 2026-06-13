@@ -76,8 +76,47 @@ GLOSSARY: list[GlossaryEntry] = [
         "untrusted network. Defined with `interface TunnelX`, tunnel source, "
         "and tunnel destination. Often paired with IPsec for encryption.",
         keywords=["gre", "tunnel", "vpn", "site-to-site", "overlay"],
-        action_ids=["gre_tunnel", "show_ip_int_brief"],
+        action_ids=["gre_tunnel", "ipsec_site_to_site", "show_ip_int_brief", "show_crypto"],
         category="Routing",
+    ),
+    GlossaryEntry(
+        "IPsec VPN",
+        "Encrypts traffic between sites using ISAKMP (key exchange) and IPsec "
+        "transform sets. Applied via crypto map on a physical interface.",
+        keywords=["ipsec", "isakmp", "crypto", "vpn", "site-to-site", "psk"],
+        action_ids=["ipsec_site_to_site", "show_crypto", "gre_tunnel"],
+        category="Routing",
+    ),
+    GlossaryEntry(
+        "Spanning Tree / Portfast",
+        "STP prevents loops in L2 networks. Portfast on access ports skips "
+        "listening/learning so PCs/phones connect faster.",
+        keywords=["stp", "spanning-tree", "portfast", "loop", "bpdu"],
+        action_ids=["set_portfast", "set_bpduguard", "show_stp"],
+        category="Layer 2",
+    ),
+    GlossaryEntry(
+        "DHCP Snooping",
+        "Blocks rogue DHCP servers by binding MAC to IP on trusted ports only.",
+        keywords=["dhcp", "snooping", "trust", "rogue", "server"],
+        action_ids=["enable_dhcp_snooping", "set_dhcp_snoop_trust", "show_dhcp_snoop"],
+        category="Layer 2",
+    ),
+    GlossaryEntry(
+        "802.1X",
+        "Port-based network access control — clients authenticate (usually via "
+        "RADIUS) before the switch forwards traffic.",
+        keywords=["802.1x", "dot1x", "radius", "nacs", "authentication"],
+        action_ids=["dot1x_port"],
+        category="Security",
+    ),
+    GlossaryEntry(
+        "QoS / DSCP trust",
+        "Quality of Service — prioritizes voice/video traffic. Trust DSCP "
+        "honors markings on incoming frames.",
+        keywords=["qos", "dscp", "cos", "voice", "priority"],
+        action_ids=["set_trust_dscp"],
+        category="Layer 2",
     ),
     GlossaryEntry(
         "CDP (Cisco Discovery Protocol)",
