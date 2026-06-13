@@ -321,12 +321,14 @@ def get_device_with_credentials(
 
 
 DEMO_DEVICES = [
-    # name, ip, location, group
-    ("SW-CORE-01", "198.51.100.1", "HQ Tbilisi", "Core"),
-    ("SW-FLOOR1-ACCESS", "198.51.100.11", "HQ Tbilisi", "Floor-1"),
-    ("SW-FLOOR2-ACCESS", "198.51.100.12", "HQ Tbilisi", "Floor-2"),
-    ("SW-BR1-ACCESS", "198.51.100.21", "Branch Batumi", "Floor-1"),
-    ("SW-BR2-ACCESS", "198.51.100.31", "Warehouse Rustavi", "Main Hall"),
+    # name, ip, location, group, device_type
+    ("SW-CORE-01", "198.51.100.1", "HQ Tbilisi", "Core", "cisco_ios"),
+    ("SW-FLOOR1-ACCESS", "198.51.100.11", "HQ Tbilisi", "Floor-1", "cisco_ios"),
+    ("SW-FLOOR2-ACCESS", "198.51.100.12", "HQ Tbilisi", "Floor-2", "cisco_ios"),
+    ("SW-BR1-ACCESS", "198.51.100.21", "Branch Batumi", "Floor-1", "cisco_ios"),
+    ("SW-BR2-ACCESS", "198.51.100.31", "Warehouse Rustavi", "Main Hall", "cisco_ios"),
+    ("NX-DEMO-CORE", "198.51.100.50", "HQ Tbilisi", "Core", "cisco_nxos"),
+    ("FW-DEMO-EDGE", "198.51.100.51", "HQ Tbilisi", "Edge", "cisco_asa"),
 ]
 
 
@@ -334,12 +336,12 @@ def seed_demo_devices(key: bytes, db_path: str = config.DB_PATH) -> int:
     """Insert offline simulator devices for visual testing. Skips existing IPs."""
     existing = {d["ip"] for d in list_devices(db_path=db_path)}
     added = 0
-    for name, ip, location, group in DEMO_DEVICES:
+    for name, ip, location, group, dtype in DEMO_DEVICES:
         if ip in existing:
             continue
         add_device(
             key, name=name, ip=ip, username="demo", password="demo",
-            secret="demo", device_type="cisco_ios", port=config.DEFAULT_SSH_PORT,
+            secret="demo", device_type=dtype, port=config.DEFAULT_SSH_PORT,
             location=location, group_name=group, is_demo=1, db_path=db_path,
         )
         added += 1

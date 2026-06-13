@@ -79,12 +79,13 @@ Still planned: PoE budget policing, per-class limits (platform-specific).
 | Checkbox port selection | Done |
 | Cheat sheet / Coach with keyword search | Done |
 | Task-first “I want to…” wizard | Done (Quick Wizard page) |
-| IPsec/DMVPN tunnel wizards | IPsec done; DMVPN planned |
+| IPsec/DMVPN tunnel wizards | IPsec + DMVPN spoke Action Card done; hub wizard planned |
 | Full CLI parity via Action Cards | Ongoing — add actions in `actions.py` |
-| NX-OS / ASA platform packs | Planned |
+| NX-OS / ASA platform packs | Initial pack (show + basic config); grows over time |
+| Visual switch-face port grid | Done — Control Center port picker |
 
-PoE, cheat sheet, and checkbox ports shipped in this release. Next: unified intent wizard
-and deeper tunnel/crypto workflows.
+PoE, cheat sheet, checkbox ports, Quick Wizard, switch-face picker, and platform-filtered
+Action Cards shipped. Next: DMVPN hub wizard, more NX-OS/ASA cards, deeper tunnel/crypto.
 
 ---
 
@@ -98,6 +99,7 @@ and deeper tunnel/crypto workflows.
 | `actions.py` | Action Card catalog — explanations + Jinja2 CLI templates |
 | `wizard.py` | Quick Wizard intent definitions (maps to Action Cards) |
 | `cheatsheet.py` | Searchable glossary + keyword index linking terms to Action Cards |
+| `port_panel.py` | Visual switch-face port grid for the port picker |
 | `simulator.py` | Offline stateful Cisco IOS simulator for demo/testing |
 | `app.py` | Streamlit UI — Login, Scanner, Inventory, Control Center, Backups, Audit, Settings |
 

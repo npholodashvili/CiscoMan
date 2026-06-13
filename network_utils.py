@@ -17,6 +17,11 @@ import config
 import simulator
 
 try:
+    import actions
+except ImportError:
+    actions = None  # pragma: no cover
+
+try:
     from ntc_templates.parse import parse_output
 
     NTC_AVAILABLE = True
@@ -131,6 +136,40 @@ def _build_params(device: dict) -> dict:
     return params
 
 
+def _platform_family(device: dict) -> str:
+    if actions is not None:
+        return actions.platform_family(device.get("device_type", "cisco_ios"))
+    dtype = device.get("device_type", "cisco_ios")
+    return {"cisco_nxos": "nxos", "cisco_asa": "asa"}.get(dtype, "ios")
+
+
+def _prepare_session(conn, device: dict) -> None:
+    """Enable + disable paging for readable show output on IOS/NX-OS/ASA."""
+    if device.get("secret"):
+        try:
+            conn.enable()
+        except Exception:  # noqa: BLE001
+            pass
+    fam = _platform_family(device)
+    try:
+        if fam == "asa":
+            conn.send_command("terminal pager 0", read_timeout=30)
+        else:
+            conn.send_command("terminal length 0", read_timeout=30)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def interface_status_command(device: dict) -> tuple[str, bool]:
+    """Return (show command, use_textfsm) for loading port lists."""
+    fam = _platform_family(device)
+    if fam == "nxos":
+        return "show interface status", True
+    if fam == "asa":
+        return "show interface ip brief", False
+    return "show interfaces status", True
+
+
 def test_connection(device: dict) -> ExecResult:
     """Open a session and immediately close it; validates reachability + creds."""
     name = device.get("name", device["ip"])
@@ -141,6 +180,7 @@ def test_connection(device: dict) -> ExecResult:
         return ExecResult(device.get("id"), name, device["ip"], False, error="Netmiko not installed")
     try:
         with ConnectHandler(**_build_params(device)) as conn:
+            _prepare_session(conn, device)
             prompt = conn.find_prompt()
         return ExecResult(device.get("id"), name, device["ip"], True, output=f"Connected. Prompt: {prompt}")
     except NetmikoAuthenticationException:
@@ -163,11 +203,7 @@ def run_show_commands(
         return ExecResult(device.get("id"), name, device["ip"], False, error="Netmiko not installed")
     try:
         with ConnectHandler(**_build_params(device)) as conn:
-            if device.get("secret"):
-                try:
-                    conn.enable()
-                except Exception:  # noqa: BLE001 - some devices don't need enable
-                    pass
+            _prepare_session(conn, device)
             chunks = []
             parsed_all = []
             for cmd in cmds:
@@ -206,11 +242,7 @@ def send_config(device: dict, config_lines: Iterable[str], save: bool = False) -
         return ExecResult(device.get("id"), name, device["ip"], False, error="Netmiko not installed")
     try:
         with ConnectHandler(**_build_params(device)) as conn:
-            if device.get("secret"):
-                try:
-                    conn.enable()
-                except Exception:  # noqa: BLE001
-                    pass
+            _prepare_session(conn, device)
             out = conn.send_config_set(lines)
             if save:
                 out += "\n" + conn.save_config()

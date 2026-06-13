@@ -174,6 +174,30 @@ GLOSSARY: list[GlossaryEntry] = [
         action_ids=["port_updown"],
         category="Switching",
     ),
+    GlossaryEntry(
+        "DMVPN (Dynamic Multipoint VPN)",
+        "Hub-and-spoke VPN over GRE multipoint tunnels with IPsec. Spokes register "
+        "with a hub; routing (often EIGRP/OSPF) runs over the overlay.",
+        keywords=["dmvpn", "gre", "multipoint", "hub", "spoke", "nhrp", "overlay"],
+        action_ids=["dmvpn_hub", "dmvpn_spoke", "gre_tunnel", "ipsec_site_to_site", "show_crypto"],
+        category="Routing",
+    ),
+    GlossaryEntry(
+        "vPC (Virtual Port Channel)",
+        "Nexus feature that pairs two switches so downstream devices see one logical "
+        "port-channel. Requires peer-link and keepalive between peers.",
+        keywords=["vpc", "nexus", "nx-os", "peer-link", "keepalive", "port-channel"],
+        action_ids=["nxos_show_vpc", "nxos_vpc_domain", "nxos_show_lldp"],
+        category="NX-OS",
+    ),
+    GlossaryEntry(
+        "ASA firewall interface",
+        "ASA uses named security zones (outside, inside, dmz) on physical interfaces. "
+        "ACLs andNAT policies reference these names, not just IP subnets.",
+        keywords=["asa", "firewall", "nameif", "outside", "inside", "dmz", "xlate", "nat"],
+        action_ids=["asa_nameif", "asa_show_conn", "asa_show_xlate"],
+        category="ASA",
+    ),
 ]
 
 

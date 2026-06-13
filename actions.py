@@ -39,9 +39,11 @@ class Action:
     explanation: str
     template: str
     params: list[Param] = field(default_factory=list)
-    save_after: bool = False  # offer 'write memory' for config actions
+    save_after: bool = False
     use_textfsm: bool = False
     danger: bool = False
+    platforms: list[str] = field(default_factory=lambda: ["all"])
+    """'all' or family tags: ios, nxos, asa, xr."""
 
     def render(self, values: dict) -> list[str]:
         """Render the Jinja template into a list of CLI lines."""
@@ -621,6 +623,258 @@ ACTIONS: list[Action] = [
         save_after=True,
         danger=True,
     ),
+    Action(
+        id="dmvpn_hub",
+        name="DMVPN Hub (GRE multipoint + NHRP)",
+        category="Routing & Tunnels",
+        kind="config",
+        platforms=["ios"],
+        explanation=(
+            "Hub side of a DMVPN cloud: GRE multipoint tunnel with NHRP network-id, "
+            "IPsec profile, and ISAKMP key for any spoke (0.0.0.0). Deploy before "
+            "spokes; match PSK, transform-set, and NHRP settings on each spoke."
+        ),
+        template=(
+            "crypto isakmp policy {{ policy_name }}\n"
+            " encr {{ encryption }}\n"
+            " authentication pre-share\n"
+            " group {{ dh_group }}\n"
+            "crypto isakmp key {{ key_name }} address 0.0.0.0 0.0.0.0 key {{ psk }}\n"
+            "crypto ipsec transform-set {{ transform_name }} esp-aes esp-sha-hmac\n"
+            "crypto ipsec profile {{ profile_name }}\n"
+            " set transform-set {{ transform_name }}\n"
+            " set ikev2 profile default\n"
+            "interface Tunnel{{ tunnel_id }}\n"
+            " ip address {{ hub_tunnel_ip }} {{ hub_tunnel_mask }}\n"
+            " no ip redirects\n"
+            " ip nhrp network-id {{ nhrp_id }}\n"
+            " ip nhrp authentication {{ nhrp_key }}\n"
+            " ip nhrp map {{ hub_public_ip }} {{ nhrp_id }} multicast\n"
+            " tunnel source {{ source_if }}\n"
+            " tunnel mode gre multipoint\n"
+            " tunnel key {{ gre_key }}\n"
+            " tunnel protection ipsec profile {{ profile_name }}"
+        ),
+        params=[
+            Param("policy_name", "ISAKMP policy", "text", default="DMVPN-POLICY"),
+            Param("key_name", "ISAKMP key name", "text", default="DMVPN-KEY"),
+            Param("psk", "Pre-shared key (shared with spokes)", "text", placeholder="long-random-key"),
+            Param("encryption", "Encryption", "select", default="aes 256",
+                  options=["aes 128", "aes 256"]),
+            Param("dh_group", "DH group", "select", default="14", options=["2", "5", "14"]),
+            Param("transform_name", "Transform-set", "text", default="DMVPN-TS"),
+            Param("profile_name", "IPsec profile", "text", default="DMVPN-PROF"),
+            Param("tunnel_id", "Tunnel number", "int", default=0),
+            Param("hub_tunnel_ip", "Hub tunnel IP", "text", default="10.255.0.254"),
+            Param("hub_tunnel_mask", "Hub tunnel mask", "text", default="255.255.255.252"),
+            Param("hub_public_ip", "Hub public IP (NHRP map)", "text", placeholder="203.0.113.1"),
+            Param("nhrp_id", "NHRP network-id", "int", default=1),
+            Param("nhrp_key", "NHRP authentication key", "text", default="nhrp-secret"),
+            Param("gre_key", "GRE tunnel key", "text", default="gre123"),
+            Param("source_if", "Source interface (WAN)", "text", default="GigabitEthernet1/0/24"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    Action(
+        id="dmvpn_spoke",
+        name="DMVPN Spoke (GRE + IPsec profile)",
+        category="Routing & Tunnels",
+        kind="config",
+        platforms=["ios"],
+        explanation=(
+            "Hub-and-spoke DMVPN spoke: GRE multipoint tunnel protected by IPsec "
+            "profile, plus ISAKMP to the hub. Requires matching hub config and "
+            "routing protocol on both ends."
+        ),
+        template=(
+            "crypto isakmp policy {{ policy_name }}\n"
+            " encr {{ encryption }}\n"
+            " authentication pre-share\n"
+            " group {{ dh_group }}\n"
+            "crypto isakmp key {{ key_name }} address {{ hub_ip }} key {{ psk }}\n"
+            "crypto ipsec transform-set {{ transform_name }} esp-aes esp-sha-hmac\n"
+            "crypto ipsec profile {{ profile_name }}\n"
+            " set transform-set {{ transform_name }}\n"
+            " set ikev2 profile default\n"
+            "interface Tunnel{{ tunnel_id }}\n"
+            " tunnel mode gre multipoint\n"
+            " ip address {{ tunnel_ip }} {{ tunnel_mask }}\n"
+            " tunnel source {{ source_if }}\n"
+            " tunnel destination {{ hub_ip }}\n"
+            " tunnel protection ipsec profile {{ profile_name }}"
+        ),
+        params=[
+            Param("policy_name", "ISAKMP policy", "text", default="DMVPN-POLICY"),
+            Param("key_name", "ISAKMP key name", "text", default="DMVPN-KEY"),
+            Param("psk", "Pre-shared key", "text", placeholder="long-random-key"),
+            Param("hub_ip", "Hub public IP", "text", placeholder="203.0.113.1"),
+            Param("encryption", "Encryption", "select", default="aes 256",
+                  options=["aes 128", "aes 256"]),
+            Param("dh_group", "DH group", "select", default="14", options=["2", "5", "14"]),
+            Param("transform_name", "Transform-set", "text", default="DMVPN-TS"),
+            Param("profile_name", "IPsec profile", "text", default="DMVPN-PROF"),
+            Param("tunnel_id", "Tunnel number", "int", default=0),
+            Param("tunnel_ip", "Tunnel IP", "text", default="10.255.0.1"),
+            Param("tunnel_mask", "Tunnel mask", "text", default="255.255.255.252"),
+            Param("source_if", "Source interface", "text", default="GigabitEthernet1/0/24"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    # ---- NX-OS ----------------------------------------------------------------
+    Action(
+        id="nxos_show_vpc",
+        name="Show vPC Status",
+        category="NX-OS",
+        kind="show",
+        platforms=["nxos"],
+        explanation="Shows Virtual Port Channel status — peer-link and keepalive on Nexus switches.",
+        template="show vpc brief",
+    ),
+    Action(
+        id="nxos_vpc_domain",
+        name="Configure vPC Domain",
+        category="NX-OS",
+        kind="config",
+        platforms=["nxos"],
+        explanation=(
+            "Creates a vPC domain on Nexus: feature vpc, domain ID, peer-link, "
+            "and optional peer-keepalive destination."
+        ),
+        template=(
+            "feature vpc\n"
+            "vpc domain {{ domain_id }}\n"
+            " peer-link {{ peer_link }}\n"
+            " role priority {{ priority }}\n"
+            " keepalive destination {{ keepalive_dst }}"
+        ),
+        params=[
+            Param("domain_id", "Domain ID", "int", default=1),
+            Param("peer_link", "Peer-link port-channel", "text", default="port-channel1"),
+            Param("priority", "Role priority", "int", default=100),
+            Param("keepalive_dst", "Keepalive dest IP", "text", placeholder="192.168.1.2"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    Action(
+        id="nxos_show_lldp",
+        name="Show LLDP Neighbors",
+        category="NX-OS",
+        kind="show",
+        platforms=["nxos"],
+        explanation="LLDP neighbor table on Nexus (like CDP on IOS).",
+        template="show lldp neighbors",
+    ),
+    Action(
+        id="nxos_show_version",
+        name="Show NX-OS Version",
+        category="NX-OS",
+        kind="show",
+        platforms=["nxos"],
+        explanation="Software version, platform, and uptime on a Nexus switch.",
+        template="show version",
+    ),
+    Action(
+        id="nxos_show_run",
+        name="Show Running Config (NX-OS)",
+        category="NX-OS",
+        kind="show",
+        platforms=["nxos"],
+        explanation="Active configuration on Nexus — same idea as IOS show run.",
+        template="show running-config",
+    ),
+    Action(
+        id="nxos_int_status",
+        name="Show Interface Status (NX-OS)",
+        category="NX-OS",
+        kind="show",
+        platforms=["nxos"],
+        explanation="Port link state and VLAN assignment on Nexus switches.",
+        template="show interface status",
+        use_textfsm=True,
+    ),
+    # ---- ASA ------------------------------------------------------------------
+    Action(
+        id="asa_show_conn",
+        name="Show Active Connections",
+        category="ASA",
+        kind="show",
+        platforms=["asa"],
+        explanation="Lists active connections through the ASA firewall.",
+        template="show conn",
+    ),
+    Action(
+        id="asa_show_xlate",
+        name="Show xlate (NAT) Table",
+        category="ASA",
+        kind="show",
+        platforms=["asa"],
+        explanation="Shows current translation (NAT) entries on ASA.",
+        template="show xlate",
+    ),
+    Action(
+        id="asa_nameif",
+        name="Name Firewall Interface",
+        category="ASA",
+        kind="config",
+        platforms=["asa"],
+        explanation=(
+            "Assigns a logical name (outside/inside/dmz) to a physical ASA interface."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            " nameif {{ if_name }}"
+        ),
+        params=[
+            Param("interface", "Interface", "text", placeholder="GigabitEthernet0/0"),
+            Param("if_name", "Name", "select", default="outside",
+                  options=["outside", "inside", "dmz"]),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    Action(
+        id="asa_show_version",
+        name="Show ASA Version",
+        category="ASA",
+        kind="show",
+        platforms=["asa"],
+        explanation="ASA software version, model, and uptime.",
+        template="show version",
+    ),
+    Action(
+        id="asa_show_run",
+        name="Show Running Config (ASA)",
+        category="ASA",
+        kind="show",
+        platforms=["asa"],
+        explanation="Active firewall configuration.",
+        template="show running-config",
+    ),
+    Action(
+        id="asa_access_list",
+        name="Add Extended ACL Rule",
+        category="ASA",
+        kind="config",
+        platforms=["asa"],
+        explanation=(
+            "Adds a line to an extended access-list on ASA. Use for permit/deny "
+            "before applying the ACL to an interface."
+        ),
+        template="access-list {{ acl_name }} {{ action }} {{ protocol }} {{ source }} {{ destination }}",
+        params=[
+            Param("acl_name", "ACL name", "text", default="OUTSIDE_IN"),
+            Param("action", "Action", "select", default="permit", options=["permit", "deny"]),
+            Param("protocol", "Protocol", "select", default="ip",
+                  options=["ip", "tcp", "udp", "icmp"]),
+            Param("source", "Source", "text", default="any"),
+            Param("destination", "Destination", "text", default="any"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
     # ---- Custom escape hatch -------------------------------------------------
     Action(
         id="custom_show",
@@ -658,3 +912,28 @@ CATEGORIES: list[str] = list(dict.fromkeys(a.category for a in ACTIONS))
 
 def get_action(action_id: str) -> Action:
     return ACTIONS_BY_ID[action_id]
+
+
+def platform_family(device_type: str) -> str:
+    mapping = {
+        "cisco_ios": "ios",
+        "cisco_xe": "ios",
+        "cisco_nxos": "nxos",
+        "cisco_xr": "xr",
+        "cisco_asa": "asa",
+        "cisco_s300": "ios",
+    }
+    return mapping.get(device_type, "ios")
+
+
+def action_visible(action: Action, device_types: set[str]) -> bool:
+    if "all" in action.platforms:
+        return True
+    families = {platform_family(dt) for dt in device_types}
+    return bool(families & set(action.platforms))
+
+
+def filter_actions(action_list: list[Action], device_types: set[str]) -> list[Action]:
+    if not device_types:
+        return action_list
+    return [a for a in action_list if action_visible(a, device_types)]

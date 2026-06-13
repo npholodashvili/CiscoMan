@@ -17,6 +17,8 @@ import cheatsheet
 import config
 import database as db
 import network_utils as net
+import port_panel
+import tunnel_wizard
 import wizard
 
 st.set_page_config(page_title="CiscoMan", page_icon="🛰️", layout="wide")
@@ -315,15 +317,34 @@ def page_control_center() -> None:
     st.subheader("1. Choose targets")
     picked_ids = _render_target_picker(devices, "cc")
     st.caption(f"{len(picked_ids)} device(s) selected.")
+    target_types = _device_types_for_targets(devices, picked_ids)
+    if target_types:
+        families = sorted({actions.platform_family(dt) for dt in target_types})
+        st.caption(
+            f"Showing tasks compatible with selected platforms: {', '.join(families)}."
+        )
 
     # --- Action selection via tabs -------------------------------------------
     st.subheader("2. Choose an action")
     st.caption("Pick a category tab, then a task. Settings and a live CLI preview appear below.")
     goto = st.session_state.pop("goto_action", None)
+    goto_act = actions.ACTIONS_BY_ID.get(goto) if goto else None
+    if goto_act:
+        st.success(
+            f"📌 **{goto_act.name}** — open the **{goto_act.category}** tab below."
+        )
+
+    # --- Action selection via tabs -------------------------------------------
     tabs = st.tabs([f"{_CAT_ICON.get(c, '•')} {c}" for c in actions.CATEGORIES])
     for tab, cat in zip(tabs, actions.CATEGORIES):
         with tab:
-            cat_actions = [a for a in actions.ACTIONS if a.category == cat]
+            cat_actions = actions.filter_actions(
+                [a for a in actions.ACTIONS if a.category == cat],
+                target_types,
+            )
+            if not cat_actions:
+                st.info("No tasks in this category for the selected device types.")
+                continue
             radio_key = f"act_radio_{cat}"
             if goto:
                 match = next((a for a in cat_actions if a.id == goto), None)
@@ -345,8 +366,16 @@ _CAT_ICON = {
     "Routing & Tunnels": "🛤️",
     "Layer 2": "🔗",
     "Security": "🔒",
+    "NX-OS": "🔷",
+    "ASA": "🛡️",
     "Custom": "⌨️",
 }
+
+
+def _device_types_for_targets(devices: list[dict], picked_ids: list[int]) -> set[str]:
+    if not picked_ids:
+        return set()
+    return {d["device_type"] for d in devices if d["id"] in picked_ids}
 
 
 def _render_target_picker(devices: list[dict], key_prefix: str = "tgt") -> list[int]:
@@ -362,7 +391,7 @@ def _render_target_picker(devices: list[dict], key_prefix: str = "tgt") -> list[
         if (loc_filter == "(all)" or d["location"] == loc_filter)
         and (group_filter == "(all)" or d["group_name"] == group_filter)
     ]
-    select_all = colf3.checkbox(f"Select all shown ({len(pool)})", key=f"{key_prefix}_all")
+    select_all = colf3.checkbox(f"Select all shown ({len(pool)})", key=f"{key_prefix}_dev_all")
     picked_ids: list[int] = []
     if pool:
         by_location: dict[str, list[dict]] = {}
@@ -375,8 +404,9 @@ def _render_target_picker(devices: list[dict], key_prefix: str = "tgt") -> list[
                 with grid[i % 3]:
                     tag = " 🧪" if d.get("is_demo") else ""
                     grp = f' · {d["group_name"]}' if d["group_name"] else ""
+                    fam = actions.platform_family(d.get("device_type", "cisco_ios"))
                     if st.checkbox(
-                        f'{d["name"]}{tag}  ·  {d["ip"]}{grp}',
+                        f'{d["name"]}{tag}  ·  {d["ip"]}{grp}  ·  {fam}',
                         key=f"{key_prefix}_{d['id']}", value=select_all,
                     ):
                         picked_ids.append(d["id"])
@@ -461,17 +491,26 @@ def _render_action_ui(action: actions.Action, picked_ids: list, devices: list) -
 
 
 def _fetch_ports(device: dict) -> tuple[bool, list[dict], str]:
-    res = net.run_show_commands(device, ["show interfaces status"], use_textfsm=True)
+    cmd, use_tfsm = net.interface_status_command(device)
+    res = net.run_show_commands(device, [cmd], use_textfsm=use_tfsm)
     ports = []
     for raw in (res.parsed or []):
         row = {str(k).lower(): v for k, v in raw.items()}
-        port = row.get("port") or row.get("interface") or ""
+        port = row.get("port") or row.get("interface") or row.get("name") or ""
         if not port:
             continue
         ports.append({
             "port": port, "status": row.get("status", ""),
             "vlan": row.get("vlan", ""), "name": row.get("name", ""),
         })
+    if not ports and res.success and res.output and not use_tfsm:
+        for line in res.output.splitlines():
+            parts = line.split()
+            if parts and (parts[0].startswith("Gigabit") or parts[0].startswith("Ethernet")):
+                ports.append({
+                    "port": parts[0], "status": parts[2] if len(parts) > 2 else "",
+                    "vlan": "", "name": parts[1] if len(parts) > 1 else "",
+                })
     return res.success, ports, res.error
 
 
@@ -565,32 +604,42 @@ def _interface_from_device(prefix: str, picked_ids: list, devices: list) -> str:
 
     selected: set[str] = set(st.session_state.get(sel_key, set()))
     ba, bb, bc = st.columns(3)
-    if ba.button("☑️ All ports", key=f"{prefix}_all"):
+    if ba.button("☑️ All ports", key=f"{prefix}_ports_all"):
         st.session_state[sel_key] = {p["port"] for p in ports}
         st.rerun()
-    if bb.button("☑️ Connected only", key=f"{prefix}_conn"):
+    if bb.button("☑️ Connected only", key=f"{prefix}_ports_conn"):
         st.session_state[sel_key] = {
             p["port"] for p in ports if p["status"] in ("connected", "up")
         }
         st.rerun()
-    if bc.button("Clear selection", key=f"{prefix}_clr"):
+    if bc.button("Clear selection", key=f"{prefix}_ports_clr"):
         st.session_state[sel_key] = set()
         st.rerun()
 
     st.caption("Tick each port to include it in this command:")
-    ncols = 4
-    cols = st.columns(ncols)
-    new_sel: set[str] = set()
-    for i, p in enumerate(ports):
-        bits = [p["status"] or "?"]
-        if p["vlan"]:
-            bits.append(f"vlan {p['vlan']}")
-        if p.get("name"):
-            bits.append(p["name"][:12])
-        label = f'{p["port"]}  ({", ".join(bits)})'
-        with cols[i % ncols]:
-            if st.checkbox(label, value=p["port"] in selected, key=f"{prefix}_cb_{p['port']}"):
-                new_sel.add(p["port"])
+    view = st.radio(
+        "Port view",
+        ["🎛️ Switch face", "📋 Port list"],
+        horizontal=True,
+        key=f"{prefix}_view",
+        label_visibility="collapsed",
+    )
+    if view.startswith("🎛️"):
+        new_sel = port_panel.render_switch_face(ports, selected, prefix)
+    else:
+        ncols = 4
+        cols = st.columns(ncols)
+        new_sel = set()
+        for i, p in enumerate(ports):
+            bits = [p["status"] or "?"]
+            if p["vlan"]:
+                bits.append(f"vlan {p['vlan']}")
+            if p.get("name"):
+                bits.append(p["name"][:12])
+            label = f'{p["port"]}  ({", ".join(bits)})'
+            with cols[i % ncols]:
+                if st.checkbox(label, value=p["port"] in selected, key=f"{prefix}_cb_{p['port']}"):
+                    new_sel.add(p["port"])
     st.session_state[sel_key] = new_sel
     expr = _interface_expr(list(new_sel))
     if expr:
@@ -813,9 +862,19 @@ def page_quick_wizard() -> None:
     iface_expr = _interface_from_device("qw", picked_ids, devices) if picked_ids else ""
 
     st.subheader("3. What to do")
+    target_types = _device_types_for_targets(devices, picked_ids)
+    intents = wizard.INTENTS
+    if target_types:
+        intents = [
+            i for i in wizard.INTENTS
+            if actions.action_visible(actions.get_action(i.action_id), target_types)
+        ]
+    if not intents:
+        st.warning("No wizard tasks match the selected device types.")
+        return
     intent = st.radio(
         "Choose task",
-        wizard.INTENTS,
+        intents,
         format_func=lambda i: i.label,
         key="qw_intent",
     )
@@ -858,6 +917,43 @@ def page_quick_wizard() -> None:
         _execute(action, cli_lines, save_after, picked_ids)
 
 
+def page_tunnel_wizard() -> None:
+    st.header("🛤️ DMVPN Tunnel Wizard")
+    st.caption(
+        "Step-by-step hub or spoke setup — shared crypto, GRE multipoint, NHRP on the hub. "
+        "Deploy the **hub first**, then spokes with matching PSK and NHRP network-id."
+    )
+    devices = db.list_devices()
+    if not devices:
+        st.info("Add devices first (Scanner or Inventory).")
+        return
+
+    st.subheader("1. Targets")
+    picked_ids = _render_target_picker(devices, "tw")
+    target_types = _device_types_for_targets(devices, picked_ids)
+    if target_types:
+        st.caption(
+            "Platforms: " + ", ".join(sorted({actions.platform_family(dt) for dt in target_types}))
+        )
+
+    st.subheader("2. Hub or spoke")
+    roles = tunnel_wizard.compatible_roles(target_types)
+    if not roles:
+        st.warning("DMVPN requires **IOS/XE** targets. Select IOS devices or add demo switches.")
+        return
+    role = st.radio(
+        "Role",
+        roles,
+        format_func=lambda r: r.label,
+        key="tw_role",
+    )
+    st.info(f"**What this does:** {role.explanation}")
+
+    st.subheader("3. Settings & run")
+    action = tunnel_wizard.action_for_role(role.id)
+    _render_action_ui(action, picked_ids, devices)
+
+
 def page_coach() -> None:
     st.header("📚 Coach & Cheat Sheet")
     st.caption(
@@ -887,7 +983,7 @@ def page_coach() -> None:
                         c1.markdown(f"- **{act.name}** ({act.category})")
                         if c2.button("Open in Control Center", key=f"goto_{aid}_{entry.term[:8]}"):
                             st.session_state["goto_action"] = aid
-                            st.session_state["sidebar_nav"] = "Control Center"
+                            st.session_state["pending_nav"] = "Control Center"
                             st.rerun()
 
     if hits["actions"]:
@@ -897,7 +993,7 @@ def page_coach() -> None:
                 st.info(act.explanation)
                 if st.button("Configure in Control Center", key=f"goto_act_{act.id}"):
                     st.session_state["goto_action"] = act.id
-                    st.session_state["sidebar_nav"] = "Control Center"
+                    st.session_state["pending_nav"] = "Control Center"
                     st.rerun()
 
     if not query:
@@ -959,6 +1055,11 @@ def main() -> None:
         screen_login()
         return
 
+    # Apply deferred navigation before sidebar radio is created (Coach → Control Center).
+    pending = st.session_state.pop("pending_nav", None)
+    if pending:
+        st.session_state["sidebar_nav"] = pending
+
     with st.sidebar:
         st.title("🛰️ CiscoMan")
         st.caption("Cisco IOS management, GUI-first.")
@@ -967,7 +1068,7 @@ def main() -> None:
         m1.metric("Devices", len(devs))
         m2.metric("Locations", len(db.list_locations()))
         nav_options = [
-            "Scanner", "Inventory", "Quick Wizard", "Control Center",
+            "Scanner", "Inventory", "Quick Wizard", "Tunnel Wizard", "Control Center",
             "Coach", "Backups", "Audit", "Settings",
         ]
         if "sidebar_nav" not in st.session_state:
@@ -984,6 +1085,7 @@ def main() -> None:
         "Scanner": page_scanner,
         "Inventory": page_inventory,
         "Quick Wizard": page_quick_wizard,
+        "Tunnel Wizard": page_tunnel_wizard,
         "Control Center": page_control_center,
         "Coach": page_coach,
         "Backups": page_backups,

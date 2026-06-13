@@ -33,7 +33,16 @@ _MODEL = "WS-C2960X-24TS-L"
 _IOS = "15.2(7)E3"
 
 
-def _default_state(ip: str, name: str) -> dict:
+def _default_state(ip: str, name: str, device_type: str = "cisco_ios") -> dict:
+    fam = {"cisco_nxos": "nxos", "cisco_asa": "asa"}.get(device_type, "ios")
+    if fam == "nxos":
+        return _default_nxos_state(ip, name)
+    if fam == "asa":
+        return _default_asa_state(ip, name)
+    return _default_ios_state(ip, name)
+
+
+def _default_ios_state(ip: str, name: str) -> dict:
     interfaces = {}
     for i in range(1, 9):
         port = f"GigabitEthernet1/0/{i}"
@@ -71,6 +80,53 @@ def _default_state(ip: str, name: str) -> dict:
         "acls": {},
         "dhcp_snooping": False,
         "crypto_maps": {},
+        "platform": "ios",
+    }
+
+
+def _default_nxos_state(ip: str, name: str) -> dict:
+    interfaces = {}
+    for i in range(1, 9):
+        port = f"Ethernet1/{i}"
+        connected = i % 3 != 0
+        interfaces[port] = {
+            "desc": "", "vlan": "1", "mode": "access", "voice_vlan": "", "poe": "auto",
+            "shutdown": False, "status": "connected" if connected else "notconnect",
+            "speed": "1000" if connected else "auto", "duplex": "a-full" if connected else "auto",
+            "portfast": False, "bpduguard": False, "dhcp_trust": False,
+            "trust_dscp": False, "dot1x": False,
+        }
+    return {
+        "hostname": name.replace(" ", "-"), "mgmt_ip": ip,
+        "serial": "SAL" + "".join(random.choice("0123456789ABCDEF") for _ in range(8)),
+        "uptime": f"{random.randint(1, 200)} days, {random.randint(0, 23)} hours",
+        "interfaces": interfaces, "vlans": {1: "default", 10: "DATA"},
+        "svis": {1: {"ip": ip, "mask": "255.255.255.0"}},
+        "tunnels": {}, "static_routes": [], "acls": {}, "dhcp_snooping": False,
+        "crypto_maps": {}, "vpc": {}, "platform": "nxos",
+    }
+
+
+def _default_asa_state(ip: str, name: str) -> dict:
+    interfaces = {
+        "GigabitEthernet0/0": {
+            "desc": "Outside WAN", "vlan": "", "mode": "routed", "voice_vlan": "",
+            "shutdown": False, "status": "connected", "speed": "1000", "duplex": "a-full",
+            "nameif": "outside",
+        },
+        "GigabitEthernet0/1": {
+            "desc": "Inside LAN", "vlan": "", "mode": "routed", "voice_vlan": "",
+            "shutdown": False, "status": "connected", "speed": "1000", "duplex": "a-full",
+            "nameif": "inside",
+        },
+    }
+    return {
+        "hostname": name.replace(" ", "-"), "mgmt_ip": ip,
+        "serial": "JMX" + "".join(random.choice("0123456789ABCDEF") for _ in range(8)),
+        "uptime": f"{random.randint(1, 200)} days, {random.randint(0, 23)} hours",
+        "interfaces": interfaces, "vlans": {}, "svis": {}, "tunnels": {},
+        "static_routes": [], "acls": {}, "access_lists": {},
+        "dhcp_snooping": False, "crypto_maps": {}, "platform": "asa",
     }
 
 
@@ -78,7 +134,9 @@ def _get(device: dict) -> dict:
     ip = device["ip"]
     with _lock:
         if ip not in _STATE:
-            _STATE[ip] = _default_state(ip, device.get("name", ip))
+            _STATE[ip] = _default_state(
+                ip, device.get("name", ip), device.get("device_type", "cisco_ios"),
+            )
         return _STATE[ip]
 
 
@@ -102,6 +160,20 @@ def _short(port: str) -> str:
 
 
 def _show_version(s: dict) -> str:
+    plat = s.get("platform", "ios")
+    if plat == "nxos":
+        return (
+            f"Cisco Nexus Operating System (NX-OS) Software\n"
+            f"Version {_IOS}\n{s['hostname']} uptime is {s['uptime']}\n"
+            f"Hardware: Nexus9000 C93180YC-EX (simulated)\n"
+            f"Serial: {s['serial']}\n"
+        )
+    if plat == "asa":
+        return (
+            f"Cisco Adaptive Security Appliance Software Version 9.16(simulated)\n"
+            f"{s['hostname']} uptime is {s['uptime']}\n"
+            f"Hardware: ASA5525 (simulated)  Serial: {s['serial']}\n"
+        )
     return (
         f"Cisco IOS Software, C2960X Software, Version {_IOS}, RELEASE SOFTWARE (fc3)\n"
         f"{s['hostname']} uptime is {s['uptime']}\n"
@@ -330,6 +402,41 @@ def _show_running_config(s: dict) -> str:
     return "\n".join(out)
 
 
+def _show_vpc_brief(s: dict) -> str:
+    return (
+        "vPC brief status :\n"
+        "----\n"
+        "vPC is not enabled\n"
+        "(simulated Nexus — enable feature vpc and vpc domain to configure)\n"
+    )
+
+
+def _show_lldp_neighbors(s: dict) -> str:
+    lines = ["Capability codes:\n", "Device ID          Local Intf  Hold-time  Capability  Port ID"]
+    for i, (port, data) in enumerate(s["interfaces"].items(), 1):
+        if data.get("status") == "connected":
+            lines.append(
+                f"SIM-NEIGH-{i:02d}       {port[:12]:<12} 120        B,R        Eth1/1"
+            )
+    if len(lines) == 2:
+        lines.append("(no LLDP neighbors)")
+    return "\n".join(lines)
+
+
+def _show_conn(s: dict) -> str:
+    return (
+        "6 in use, 0 most used\n"
+        "  TCP    192.168.1.10:443  10.0.0.5:51234  (simulated ASA connection)\n"
+    )
+
+
+def _show_xlate(s: dict) -> str:
+    return (
+        "2 in use, 0 most used\n"
+        "  192.168.1.10:443  10.0.0.5:51234  (simulated PAT entry)\n"
+    )
+
+
 _SHOW_TABLE = {
     "show version": _show_version,
     "show interfaces status": _show_interfaces_status,
@@ -349,6 +456,10 @@ _SHOW_TABLE = {
     "show crypto isakmp sa": _show_crypto,
     "show running-config": _show_running_config,
     "show run": _show_running_config,
+    "show vpc brief": _show_vpc_brief,
+    "show lldp neighbors": _show_lldp_neighbors,
+    "show conn": _show_conn,
+    "show xlate": _show_xlate,
 }
 
 
@@ -423,6 +534,11 @@ def apply_config(device: dict, lines: list[str]) -> str:
             pending_acl = line.split()[3]
             s["acls"].setdefault(pending_acl, [])
             cur_ifaces = []
+        elif low.startswith("access-list "):
+            parts = line.split()
+            if len(parts) >= 2:
+                s.setdefault("access_lists", {}).setdefault(parts[1], []).append(line)
+            cur_ifaces = []
         elif pending_acl and (low.startswith("permit ") or low.startswith("deny ")):
             s["acls"][pending_acl].append(line.strip())
             pending_acl = None
@@ -432,7 +548,13 @@ def apply_config(device: dict, lines: list[str]) -> str:
                 s["svis"][cur_svi] = {"ip": parts[2], "mask": parts[3]}
         elif cur_tunnel is not None:
             if low.startswith("tunnel mode gre"):
-                s["tunnels"][cur_tunnel]["mode"] = "gre"
+                s["tunnels"][cur_tunnel]["mode"] = "gre multipoint" if "multipoint" in low else "gre"
+            elif low.startswith("tunnel protection ipsec profile "):
+                s["tunnels"][cur_tunnel]["ipsec_profile"] = line.split()[-1]
+            elif low.startswith("tunnel key "):
+                s["tunnels"][cur_tunnel]["gre_key"] = line.split(None, 2)[2]
+            elif low.startswith("ip nhrp "):
+                s["tunnels"].setdefault(cur_tunnel, {})["nhrp"] = line
             elif low.startswith("tunnel source "):
                 s["tunnels"][cur_tunnel]["source"] = line.split(None, 2)[2]
             elif low.startswith("tunnel destination "):
@@ -453,6 +575,12 @@ def apply_config(device: dict, lines: list[str]) -> str:
             cur_ifaces = []
         elif low.startswith("crypto isakmp policy "):
             cur_ifaces = []
+        elif low.startswith("crypto ipsec profile "):
+            cur_ifaces = []
+        elif low.startswith("feature vpc"):
+            s.setdefault("vpc", {"enabled": True})
+        elif low.startswith("vpc domain "):
+            s.setdefault("vpc", {})["domain"] = line.split()[2]
         elif low.startswith("crypto map "):
             parts = line.split()
             if len(parts) >= 3:
