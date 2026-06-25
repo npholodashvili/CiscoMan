@@ -140,7 +140,9 @@ def _platform_family(device: dict) -> str:
     if actions is not None:
         return actions.platform_family(device.get("device_type", "cisco_ios"))
     dtype = device.get("device_type", "cisco_ios")
-    return {"cisco_nxos": "nxos", "cisco_asa": "asa"}.get(dtype, "ios")
+    fallback = {"cisco_nxos": "nxos", "cisco_asa": "asa",
+                "fiberstore_networkos": "fiberstore_networkos"}
+    return fallback.get(dtype, "ios")
 
 
 def _prepare_session(conn, device: dict) -> None:
@@ -167,6 +169,10 @@ def interface_status_command(device: dict) -> tuple[str, bool]:
         return "show interface status", True
     if fam == "asa":
         return "show interface ip brief", False
+    if fam == "fiberstore_fsosv2":
+        return "show interfaces status", False
+    if fam == "fiberstore_networkos":
+        return "show interface", False
     return "show interfaces status", True
 
 

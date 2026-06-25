@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 
 import actions
+from actions import ACTIONS, ACTIONS_BY_ID, get_action, action_visible, filter_actions, CATEGORIES
 import cheatsheet
 import config
 import database as db
@@ -490,6 +491,51 @@ def _render_action_ui(action: actions.Action, picked_ids: list, devices: list) -
         _execute(action, cli_lines, save_after, picked_ids)
 
 
+def _parse_port_line(parts: list[str]) -> dict | None:
+    """Try to extract a port dict from a split interface status line.
+    
+    Handles both Cisco style (no space: GigabitEthernet1/0/1) and
+    FSOS style (space: GigabitEthernet 1/0/1, AggregatePort 1).
+    Returns None if the line is not a valid port entry.
+    """
+    if not parts:
+        return None
+    first = parts[0]
+    has_digits = any(c.isdigit() for c in first)
+
+    # FSOS style: first token is a known prefix with no digits, second token is the port number
+    if not has_digits and len(parts) >= 3:
+        # Guard: second token must contain digits or a '/' to be a valid port number
+        second = parts[1]
+        if not any(c.isdigit() or c == "/" for c in second):
+            return None
+        port = f"{first} {second}"
+        # Status is at index 2, vlan at index 3 (may be empty/missing)
+        status = parts[2] if len(parts) > 2 else ""
+        vlan = parts[3] if len(parts) > 3 else ""
+        # FSOS output has no separate description column
+        return {"port": port, "status": status, "vlan": vlan, "name": ""}
+
+    # Cisco style or numeric-only: check first token
+    if has_digits and ("/" in first or first.isdigit()
+        or first.startswith("Gigabit") or first.startswith("FastEthernet")
+        or first.startswith("TenGigabit") or first.startswith("FortyGigabit")
+        or first.startswith("TwentyFiveGigE") or first.startswith("Port-channel")
+        or first.startswith("Vlan") or first.startswith("Management")
+        or first.startswith("Gi") or first.startswith("Fa")
+        or first.startswith("Te") or first.startswith("Twe")
+        or first.startswith("Fo") or first.startswith("Po")
+        or first.startswith("Eth") or first.startswith("Lo")
+        or first.startswith("Mgmt")):
+        return {
+            "port": first,
+            "status": parts[2] if len(parts) > 2 else "",
+            "vlan": parts[3] if len(parts) > 3 else "",
+            "name": parts[1] if len(parts) > 1 else "",
+        }
+    return None
+
+
 def _fetch_ports(device: dict) -> tuple[bool, list[dict], str]:
     cmd, use_tfsm = net.interface_status_command(device)
     res = net.run_show_commands(device, [cmd], use_textfsm=use_tfsm)
@@ -503,14 +549,12 @@ def _fetch_ports(device: dict) -> tuple[bool, list[dict], str]:
             "port": port, "status": row.get("status", ""),
             "vlan": row.get("vlan", ""), "name": row.get("name", ""),
         })
-    if not ports and res.success and res.output and not use_tfsm:
+    if not ports and res.success and res.output:
         for line in res.output.splitlines():
             parts = line.split()
-            if parts and (parts[0].startswith("Gigabit") or parts[0].startswith("Ethernet")):
-                ports.append({
-                    "port": parts[0], "status": parts[2] if len(parts) > 2 else "",
-                    "vlan": "", "name": parts[1] if len(parts) > 1 else "",
-                })
+            parsed = _parse_port_line(parts)
+            if parsed:
+                ports.append(parsed)
     return res.success, ports, res.error
 
 
@@ -534,7 +578,16 @@ def _interface_picker(param: actions.Param, action: actions.Action,
 
 
 def _fetch_vlans(device: dict) -> tuple[bool, list[tuple[int, str]], str]:
-    res = net.run_show_commands(device, ["show vlan brief"], use_textfsm=True)
+    fam = net._platform_family(device)
+    is_fsos = fam == "fiberstore_fsosv2"
+    is_netos = fam == "fiberstore_networkos"
+    if is_fsos:
+        vlan_cmd = "show vlan all"
+    elif is_netos:
+        vlan_cmd = "show vlan"
+    else:
+        vlan_cmd = "show vlan brief"
+    res = net.run_show_commands(device, [vlan_cmd], use_textfsm=not (is_fsos or is_netos))
     vlans: list[tuple[int, str]] = []
     for raw in (res.parsed or []):
         row = {str(k).lower(): v for k, v in raw.items()}
