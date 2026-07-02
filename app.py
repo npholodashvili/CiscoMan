@@ -31,9 +31,12 @@ db.init_db()
 
 
 def _ts(epoch: float | None) -> str:
-    if not epoch:
+    if epoch is None:
         return "-"
-    return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError, OSError):
+        return "-"
 
 
 def logout() -> None:

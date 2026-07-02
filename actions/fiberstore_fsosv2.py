@@ -262,6 +262,41 @@ FSOS_ACTIONS: list[Action] = [
         platforms=["fiberstore_fsosv2"],
     ),
     Action(
+        id="set_pvid_dot1x",
+        name="Set PVID (with 802.1X option)",
+        category="Port Config",
+        kind="config",
+        explanation=(
+            "Sets a port's PVID (native VLAN) and optionally enables 802.1X "
+            "with a guest VLAN. Applies spanning-tree BPDU guard for port "
+            "security. Two modes: with 802.1X (dot1x + guest-vlan 5) or "
+            "without 802.1X (VLAN only)."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            "{% if enable_dot1x %}"
+            "dot1x port-control auto\n"
+            "dot1x dynamic-vlan-enable\n"
+            "dot1x guest-vlan {{ guest_vlan }}\n"
+            "{% endif %}"
+            "spanning-tree bpduguard enable\n"
+            "switchport pvid {{ vlan }}"
+        ),
+        params=[
+            Param("interface", "Port(s)", "interface",
+                  help="Port to configure, e.g. GigaEthernet0/5"),
+            Param("vlan", "PVID / Access VLAN", "int", default=100,
+                  help="VLAN number (1-4094) to assign as the port's PVID."),
+            Param("enable_dot1x", "Enable 802.1X + guest VLAN", "bool",
+                  default=False,
+                  help="Check to add dot1x port-control auto and guest-vlan."),
+            Param("guest_vlan", "802.1X Guest VLAN ID", "int", default=5,
+                  help="Guest VLAN used when 802.1X is enabled."),
+        ],
+        save_after=True,
+        platforms=["fiberstore_fsosv2"],
+    ),
+    Action(
         id="set_storm_control",
         name="Storm Control",
         category="Port Config",
@@ -551,6 +586,48 @@ FSOS_ACTIONS: list[Action] = [
         template=(
             "ip ssh server enable"
         ),
+        platforms=["fiberstore_fsosv2"],
+    ),
+    Action(
+        id="enable_web",
+        name="Enable Web Interface",
+        category="Switch Config",
+        kind="config",
+        explanation=(
+            "Enables the HTTP/HTTPS web management interface and loads the "
+            "web UI image. Optionally set the server port, timeout and "
+            "authentication method."
+        ),
+        template=(
+            "httpserver load {{ web_image }}\n"
+            "service http {{ 'enable' if http_enable else 'disable' }}\n"
+            "{% if https_enable %}service https enable\n{% endif %}"
+            "httptimeout {{ timeout }}\n"
+            "{% if custom_port %}httpserversourceport {{ http_port }}\n{% endif %}"
+            "{% if custom_ssl_port %}httpserversourcessl-port {{ https_port }}\n{% endif %}"
+            "{% if auth_aaa %}httpauthentication aaa login-authentication {{ aaa_list }}\n"
+            "{% else %}httpauthentication local\n{% endif %}"
+        ),
+        params=[
+            Param("web_image", "Web UI image path", "text",
+                  default="flash:/webImage.bin",
+                  placeholder="flash:/webImage.bin"),
+            Param("http_enable", "Enable HTTP", "bool", default=True),
+            Param("https_enable", "Enable HTTPS", "bool", default=False),
+            Param("timeout", "Session timeout (minutes)", "int", default=20,
+                  help="1-60 minutes."),
+            Param("custom_port", "Use custom HTTP port", "bool", default=False),
+            Param("http_port", "HTTP port", "int", default=80,
+                  help="1025-65535, or 80 for default."),
+            Param("custom_ssl_port", "Use custom HTTPS port", "bool", default=False),
+            Param("https_port", "HTTPS port", "int", default=443,
+                  help="1025-65535, or 443 for default."),
+            Param("auth_aaa", "Use AAA authentication", "bool", default=False,
+                  help="If disabled, uses local authentication."),
+            Param("aaa_list", "AAA method list name", "text", default="default",
+                  placeholder="default"),
+        ],
+        save_after=True,
         platforms=["fiberstore_fsosv2"],
     ),
     # ---- Routing & Tunnels ---------------------------------------------------

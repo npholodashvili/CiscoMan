@@ -249,7 +249,17 @@ def send_config(device: dict, config_lines: Iterable[str], save: bool = False) -
     try:
         with ConnectHandler(**_build_params(device)) as conn:
             _prepare_session(conn, device)
-            out = conn.send_config_set(lines)
+            fam = _platform_family(device)
+            # FSOS/NetworkOS devices often fail with Netmiko's internal config mode
+            # detection. Use manual config mode entry for non-Cisco platforms.
+            if fam in ("fiberstore_fsosv2", "fiberstore_networkos"):
+                out = conn.send_command("configure terminal", expect_string=r"\(config")
+                for line in lines:
+                    result = conn.send_command(line, expect_string=r"#")
+                    out += "\n" + result
+                out += "\n" + conn.send_command("end", expect_string=r"#")
+            else:
+                out = conn.send_config_set(lines)
             if save:
                 out += "\n" + conn.save_config()
             return ExecResult(device.get("id"), name, device["ip"], True, output=out)

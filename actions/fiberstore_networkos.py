@@ -258,6 +258,40 @@ NETWORKOS_ACTIONS: list[Action] = [
         platforms=["fiberstore_networkos"],
     ),
     Action(
+        id="set_pvid_dot1x",
+        name="Set PVID (with 802.1X option)",
+        category="Port Config",
+        kind="config",
+        explanation=(
+            "Sets a port's PVID (access VLAN) and optionally enables 802.1X "
+            "with a guest VLAN. Applies spanning-tree BPDU guard for port "
+            "security. Two modes: with 802.1X (dot1x + guest-vlan) or "
+            "without 802.1X (VLAN only)."
+        ),
+        template=(
+            "interface {{ interface }}\n"
+            "{% if enable_dot1x %}"
+            "dot1x port-control auto\n"
+            "dot1x guest-vlan {{ guest_vlan }}\n"
+            "{% endif %}"
+            "spanning-tree portfast bpdu-guard enable\n"
+            "switchport access vlan {{ vlan }}"
+        ),
+        params=[
+            Param("interface", "Port(s)", "interface",
+                  help="Port to configure, e.g. ge1, fe1"),
+            Param("vlan", "Access VLAN ID", "int", default=100,
+                  help="VLAN number (1-4094) to assign as the port's access VLAN."),
+            Param("enable_dot1x", "Enable 802.1X + guest VLAN", "bool",
+                  default=False,
+                  help="Check to add dot1x port-control auto and guest-vlan."),
+            Param("guest_vlan", "802.1X Guest VLAN ID", "int", default=5,
+                  help="Guest VLAN used when 802.1X is enabled."),
+        ],
+        save_after=True,
+        platforms=["fiberstore_networkos"],
+    ),
+    Action(
         id="set_storm_control",
         name="Storm Control",
         category="Port Config",
@@ -453,6 +487,38 @@ NETWORKOS_ACTIONS: list[Action] = [
             Param("mac_addr", "MAC Address", "text",
                   placeholder="0011.2233.4455",
                   help="MAC address in HHHH.HHHH.HHHH format"),
+        ],
+        save_after=True,
+        platforms=["fiberstore_networkos"],
+    ),
+    Action(
+        id="enable_web",
+        name="Enable Web Interface",
+        category="Switch Config",
+        kind="config",
+        explanation=(
+            "Enables the web management interface on the switch. "
+            "Configure a management VLAN IP first, then enable the web "
+            "server with optional credentials for login."
+        ),
+        template=(
+            "web enable\n"
+            "{% if username %}username {{ username }} password {{ password }}\n{% endif %}"
+            "{% if mgmt_ip %}interface vlan1.{{ mgmt_vlan }}\n"
+            "ip address {{ mgmt_ip }}/{{ mgmt_mask }}\n"
+            "no shutdown\n{% endif %}"
+        ),
+        params=[
+            Param("username", "Web login username", "text", default="admin",
+                  placeholder="admin"),
+            Param("password", "Web login password", "text", default="admin",
+                  placeholder="admin"),
+            Param("mgmt_vlan", "Management VLAN ID", "int", default=1,
+                  help="VLAN for the management IP."),
+            Param("mgmt_ip", "Management IP address (optional)", "text",
+                  default="", placeholder="192.168.1.100"),
+            Param("mgmt_mask", "Management mask length", "int", default=24,
+                  help="e.g. 24 for 255.255.255.0"),
         ],
         save_after=True,
         platforms=["fiberstore_networkos"],
