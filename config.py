@@ -81,6 +81,8 @@ SUPPORTED_DEVICE_TYPES: tuple[str, ...] = (
     "cisco_xr",
     "cisco_asa",
     "cisco_s300",
+    "fiberstore_fsosv2",
+    "fiberstore_networkos",
 )
 
 
