@@ -1,0 +1,5 @@
+{
+  "name": "OnPageNews IPTV",
+  "version": "1.0.0",
+  "parameter": "menu:http://msx.benzac.de/services/m3u.php?type=video&url=http%3A%2F%2Fonpagenews.com%2Fiptv%2FSource.m3u8"
+}
