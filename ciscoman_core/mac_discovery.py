@@ -119,9 +119,24 @@ def lookup_oui_offline(mac: str) -> Optional[str]:
     try:
         oui = get_oui_prefix(mac)
         
+        # Try multiple locations for OUI database
+        # 1. User data directory
         db_path = config.get_data_dir() / "oui.db"
+        
+        # 2. Bundled with ciscoman_core (for PyInstaller)
         if not db_path.exists():
-            logger.warning("OUI database not found, cannot perform offline lookup")
+            from pathlib import Path
+            import sys
+            
+            # PyInstaller extracts to sys._MEIPASS
+            if hasattr(sys, '_MEIPASS'):
+                db_path = Path(sys._MEIPASS) / "ciscoman_core" / "oui.db"
+            else:
+                # Running from source
+                db_path = Path(__file__).parent / "oui.db"
+        
+        if not db_path.exists():
+            logger.warning(f"OUI database not found at {db_path}, cannot perform offline lookup")
             return None
         
         conn = sqlite3.connect(str(db_path))
