@@ -1,62 +1,49 @@
-"""Worker for device identification."""
+"""Worker for batch device identification — one ARP read, bounded thread pool."""
 
 import logging
-from PySide6.QtCore import QThread, Signal
-from dataclasses import asdict
 
-from ciscoman_core import device_identification, database as db
+from PySide6.QtCore import QThread, Signal
+
+from ciscoman_core import database as db
+from ciscoman_core import device_identification
 
 logger = logging.getLogger(__name__)
 
 
 class IdentificationWorker(QThread):
-    """Worker thread for device identification."""
-    
-    progress = Signal(int, int, object)  # current, total, result
+    """Identify many hosts without per-IP subprocesses or console windows."""
+
+    progress = Signal(int, int, object)
     finished = Signal()
     error = Signal(str)
-    
+
     def __init__(self, ip_list: list[str]):
         super().__init__()
-        self.ip_list = ip_list
+        self.ip_list = list(ip_list)
         self.cancelled = False
-    
+
     def cancel(self):
-        """Cancel the operation."""
         self.cancelled = True
-    
+
     def run(self):
-        """Run identification for all IPs."""
         try:
-            # Get settings
             online_oui = db.get_setting("online_oui_lookup", "0") == "1"
             snmp_community = db.get_setting("snmp_community", "public")
-            
-            total = len(self.ip_list)
-            
-            for i, ip in enumerate(self.ip_list):
-                if self.cancelled:
-                    break
-                
-                try:
-                    # Identify device
-                    ident = device_identification.identify_device(
-                        ip,
-                        try_snmp=True,
-                        snmp_community=snmp_community,
-                        online_oui=online_oui,
-                        ping_first=True
-                    )
-                    
-                    # Emit result (even if None)
-                    self.progress.emit(i + 1, total, ident)
-                    
-                except Exception as e:
-                    logger.error(f"Identification failed for {ip}: {e}")
-                    self.progress.emit(i + 1, total, None)
-            
+
+            def on_progress(done, total, ident):
+                if not self.cancelled:
+                    self.progress.emit(done, total, ident)
+
+            device_identification.identify_hosts(
+                self.ip_list,
+                try_snmp=True,
+                snmp_community=snmp_community,
+                online_oui=online_oui,
+                max_workers=8,
+                progress_callback=on_progress,
+                cancelled=lambda: self.cancelled,
+            )
             self.finished.emit()
-            
         except Exception as e:
-            logger.error(f"Identification worker error: {e}")
+            logger.exception("Identification worker error")
             self.error.emit(str(e))

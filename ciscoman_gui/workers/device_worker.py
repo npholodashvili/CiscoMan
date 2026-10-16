@@ -60,6 +60,7 @@ class DeviceWorker(QThread):
 class ScanWorkerSignals(QObject):
     """Signals for scan worker."""
     progress = Signal(int, int, str)  # (done, total, current_ip)
+    host_found = Signal(str)  # streamed as each live host is found
     finished = Signal(list)  # List of alive IPs
     error = Signal(str)
 
@@ -78,16 +79,25 @@ class ScanWorker(QThread):
     def run(self):
         """Execute the scan."""
         try:
+            seen: set[str] = set()
+
             def progress_cb(done: int, total: int, ip: str):
                 if self._is_cancelled:
                     return
                 self.signals.progress.emit(done, total, ip)
-            
+
+            def found_cb(ip: str):
+                if self._is_cancelled or ip in seen:
+                    return
+                seen.add(ip)
+                self.signals.host_found.emit(ip)
+
             alive = net.scan_network(
                 self.target,
                 port=self.port,
                 timeout=self.timeout,
-                progress_callback=progress_cb
+                progress_callback=progress_cb,
+                host_found_callback=found_cb,
             )
             
             if not self._is_cancelled:

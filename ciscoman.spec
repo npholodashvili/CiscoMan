@@ -22,6 +22,11 @@ if ntc_templates_path:
 oui_db_path = Path('ciscoman_core/oui.db')
 if oui_db_path.exists():
     datas.append((str(oui_db_path), 'ciscoman_core'))
+    datas.append((str(oui_db_path), '.'))
+
+icon_path = Path('ciscoman_gui/icon.ico')
+if icon_path.exists():
+    datas.append((str(icon_path), 'ciscoman_gui'))
 
 a = Analysis(
     ['ciscoman_gui/main.py'],
@@ -44,6 +49,8 @@ a = Analysis(
         'ciscoman_core.mac_discovery',
         'ciscoman_core.snmp_discovery',
         'ciscoman_core.device_identification',
+        'ciscoman_core.win_native',
+        'ciscoman_gui.theme',
         'ntc_templates.parse',
         'textfsm',
         'keyring',

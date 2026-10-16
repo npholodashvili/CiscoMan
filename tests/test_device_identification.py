@@ -25,17 +25,59 @@ def test_device_identity_to_dict():
     assert "90%" in data["confidence"]
 
 
-def test_identify_device_no_network():
-    """Test device identification without network access."""
-    # This should not crash even if IP is unreachable
+def test_identify_device_uses_provided_arp_table():
+    """ARP is injected — no subprocess, vendor comes from bundled OUI."""
     ident = device_identification.identify_device(
-        "192.168.255.254",
+        "192.168.1.1",
         try_snmp=False,
-        ping_first=False
+        online_oui=False,
+        arp_table={"192.168.1.1": "00:00:0C:11:22:33"},
+        local_nets=[],
     )
-    
-    # May return None or partial info
-    assert ident is None or isinstance(ident, device_identification.DeviceIdentity)
+    assert ident.mac == "00:00:0C:11:22:33"
+    assert ident.vendor and "Cisco" in ident.vendor
+    assert "oui-db" in ident.sources
+    assert ident.identified
+
+
+def test_identify_device_remote_subnet_note():
+    """Hosts off-link must not pretend we have a MAC; UI gets an explicit note."""
+    import ipaddress
+
+    ident = device_identification.identify_device(
+        "10.10.110.71",
+        try_snmp=False,
+        arp_table={},
+        local_nets=[ipaddress.ip_network("192.168.1.0/24")],
+    )
+    assert ident.mac is None
+    assert ident.on_link is False
+    assert "Remote subnet" in ident.note
+    assert ident.source_label.startswith("Remote subnet")
+
+
+def test_identify_hosts_reads_arp_once(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_arp():
+        calls["n"] += 1
+        return {"10.0.0.1": "00:00:0C:AA:BB:CC"}
+
+    monkeypatch.setattr(
+        "ciscoman_core.device_identification.win_native.get_arp_table", fake_arp
+    )
+    monkeypatch.setattr(
+        "ciscoman_core.device_identification.win_native.local_ipv4_networks",
+        lambda: [],
+    )
+    results = device_identification.identify_hosts(
+        ["10.0.0.1", "10.0.0.2"],
+        try_snmp=False,
+        max_workers=2,
+    )
+    assert calls["n"] == 1
+    assert results[0].vendor and "Cisco" in results[0].vendor
+    assert results[1].mac is None
 
 
 def test_format_identification_summary():

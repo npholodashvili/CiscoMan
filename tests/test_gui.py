@@ -184,5 +184,7 @@ def test_scanner_page_ui(qapp, qtbot, mocker):
     assert scanner.target_input is not None
     assert scanner.port_spin is not None
     assert scanner.scan_btn is not None
+    assert scanner.table.columnCount() == 8
+    assert scanner.table.isSortingEnabled()
     
     window.close()

@@ -1,14 +1,17 @@
-"""Main application window."""
+"""Main application window with Fluent sidebar navigation."""
 
 import logging
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QStackedWidget, QMessageBox, QStatusBar
+    QPushButton, QLabel, QStackedWidget, QMessageBox, QStatusBar, QButtonGroup,
 )
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtGui import QAction, QIcon
 
 from ciscoman_core import database as db
+from ciscoman_gui.theme import apply_mica
 from ciscoman_gui.windows.login_dialog import LoginDialog
 from ciscoman_gui.windows.scanner_page import ScannerPage
 from ciscoman_gui.windows.inventory_page import InventoryPage
@@ -22,36 +25,97 @@ from ciscoman_gui.windows.settings_page import SettingsPage
 
 logger = logging.getLogger(__name__)
 
+NAV_ITEMS = [
+    (0, "Scanner", "Scan the network"),
+    (1, "Inventory", "Managed devices"),
+    (2, "Control Center", "Push CLI actions"),
+    (3, "Quick Wizard", "Guided tasks"),
+    (4, "Tunnel Wizard", "GRE / IPsec / DMVPN"),
+    (5, "Coach", "Command cheat sheet"),
+    (6, "Backups", "Config snapshots"),
+    (7, "Audit", "Action history"),
+    (8, "Settings", "Password, OUI, SNMP"),
+]
+
+
+def app_icon() -> QIcon:
+    here = Path(__file__).resolve().parent.parent
+    for candidate in (
+        here / "icon.ico",
+        here / "resources" / "icon.ico",
+        Path.cwd() / "ciscoman_gui" / "icon.ico",
+    ):
+        if candidate.is_file():
+            return QIcon(str(candidate))
+    return QIcon()
+
 
 class MainWindow(QMainWindow):
     """Main application window with navigation and pages."""
-    
+
     def __init__(self):
         super().__init__()
         self.session_key = None
         self.init_db()
         self.init_ui()
+        apply_mica(self)
         self.show_login()
-    
+
     def init_db(self):
-        """Initialize database."""
         try:
             db.init_db()
             logger.info("Database initialized successfully")
         except Exception as e:
-            logger.error(f"Database initialization failed: {e}")
+            logger.error("Database initialization failed: %s", e)
             QMessageBox.critical(self, "Database Error", f"Failed to initialize database:\n{e}")
-    
+
     def init_ui(self):
-        """Initialize the user interface."""
-        self.setWindowTitle("CiscoMan - Network Management")
-        self.setMinimumSize(1200, 800)
-        
-        # Central widget with stack for different pages
+        self.setWindowTitle("CiscoMan")
+        self.setMinimumSize(1280, 800)
+        icon = app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
+
+        root = QWidget()
+        root_layout = QHBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        sidebar = QWidget()
+        sidebar.setObjectName("NavSidebar")
+        sidebar.setFixedWidth(220)
+        side_layout = QVBoxLayout(sidebar)
+        side_layout.setContentsMargins(12, 18, 12, 12)
+        side_layout.setSpacing(4)
+
+        brand = QLabel("CiscoMan")
+        brand.setObjectName("NavBrand")
+        side_layout.addWidget(brand)
+        caption = QLabel("Network operations")
+        caption.setStyleSheet("color: #9A9A9A; font-size: 12px; padding: 0 4px 12px 4px;")
+        side_layout.addWidget(caption)
+
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+        self._nav_buttons: list[QPushButton] = []
+        for index, label, tip in NAV_ITEMS:
+            btn = QPushButton(label)
+            btn.setObjectName("NavButton")
+            btn.setCheckable(True)
+            btn.setToolTip(tip)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda checked=False, i=index: self.stack.setCurrentIndex(i))
+            self.nav_group.addButton(btn, index)
+            self._nav_buttons.append(btn)
+            side_layout.addWidget(btn)
+        self._nav_buttons[0].setChecked(True)
+        side_layout.addStretch()
+        root_layout.addWidget(sidebar)
+
         self.stack = QStackedWidget()
-        self.setCentralWidget(self.stack)
-        
-        # Create pages
+        root_layout.addWidget(self.stack, 1)
+        self.setCentralWidget(root)
+
         self.scanner_page = ScannerPage(self)
         self.inventory_page = InventoryPage(self)
         self.control_center_page = ControlCenterPage(self)
@@ -61,142 +125,81 @@ class MainWindow(QMainWindow):
         self.backups_page = BackupsPage(self)
         self.audit_page = AuditPage(self)
         self.settings_page = SettingsPage(self)
-        
-        # Add pages to stack
-        self.stack.addWidget(self.scanner_page)         # 0
-        self.stack.addWidget(self.inventory_page)       # 1
-        self.stack.addWidget(self.control_center_page)  # 2
-        self.stack.addWidget(self.quick_wizard_page)    # 3
-        self.stack.addWidget(self.tunnel_wizard_page)   # 4
-        self.stack.addWidget(self.coach_page)           # 5
-        self.stack.addWidget(self.backups_page)         # 6
-        self.stack.addWidget(self.audit_page)           # 7
-        self.stack.addWidget(self.settings_page)        # 8
-        
-        # Create menu bar
+
+        self.stack.addWidget(self.scanner_page)
+        self.stack.addWidget(self.inventory_page)
+        self.stack.addWidget(self.control_center_page)
+        self.stack.addWidget(self.quick_wizard_page)
+        self.stack.addWidget(self.tunnel_wizard_page)
+        self.stack.addWidget(self.coach_page)
+        self.stack.addWidget(self.backups_page)
+        self.stack.addWidget(self.audit_page)
+        self.stack.addWidget(self.settings_page)
+        self.stack.currentChanged.connect(self._on_page_changed)
+
         self.create_menu_bar()
-        
-        # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
-        
-        # Session timeout timer
+
         self.session_timer = QTimer(self)
         self.session_timer.timeout.connect(self.check_session)
-        self.session_timer.start(60000)  # Check every minute
-    
-    
+        self.session_timer.start(60000)
+
+    def _on_page_changed(self, index: int):
+        if 0 <= index < len(self._nav_buttons):
+            self._nav_buttons[index].setChecked(True)
+        if index == 1:
+            self.inventory_page.load_devices()
+
     def create_menu_bar(self):
-        """Create the application menu bar."""
         menubar = self.menuBar()
-        
-        # File menu
         file_menu = menubar.addMenu("&File")
-        
         logout_action = QAction("&Logout", self)
         logout_action.triggered.connect(self.logout)
         file_menu.addAction(logout_action)
-        
         file_menu.addSeparator()
-        
         exit_action = QAction("E&xit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
-        
-        # View menu
+
         view_menu = menubar.addMenu("&View")
-        
-        scanner_action = QAction("&Scanner", self)
-        scanner_action.triggered.connect(lambda: self.stack.setCurrentIndex(0))
-        view_menu.addAction(scanner_action)
-        
-        inventory_action = QAction("&Inventory", self)
-        inventory_action.triggered.connect(lambda: self.stack.setCurrentIndex(1))
-        view_menu.addAction(inventory_action)
-        
-        view_menu.addSeparator()
-        
-        control_action = QAction("&Control Center", self)
-        control_action.triggered.connect(lambda: self.stack.setCurrentIndex(2))
-        view_menu.addAction(control_action)
-        
-        wizard_action = QAction("Quick &Wizard", self)
-        wizard_action.triggered.connect(lambda: self.stack.setCurrentIndex(3))
-        view_menu.addAction(wizard_action)
-        
-        tunnel_action = QAction("&Tunnel Wizard", self)
-        tunnel_action.triggered.connect(lambda: self.stack.setCurrentIndex(4))
-        view_menu.addAction(tunnel_action)
-        
-        view_menu.addSeparator()
-        
-        coach_action = QAction("C&oach", self)
-        coach_action.triggered.connect(lambda: self.stack.setCurrentIndex(5))
-        view_menu.addAction(coach_action)
-        
-        backups_action = QAction("&Backups", self)
-        backups_action.triggered.connect(lambda: self.stack.setCurrentIndex(6))
-        view_menu.addAction(backups_action)
-        
-        audit_action = QAction("&Audit Log", self)
-        audit_action.triggered.connect(lambda: self.stack.setCurrentIndex(7))
-        view_menu.addAction(audit_action)
-        
-        settings_action = QAction("Se&ttings", self)
-        settings_action.triggered.connect(lambda: self.stack.setCurrentIndex(8))
-        view_menu.addAction(settings_action)
-        
-        # Help menu
+        for index, label, _tip in NAV_ITEMS:
+            action = QAction(label, self)
+            action.triggered.connect(lambda checked=False, i=index: self.stack.setCurrentIndex(i))
+            view_menu.addAction(action)
+
         help_menu = menubar.addMenu("&Help")
-        
         about_action = QAction("&About", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
-    
+
     def show_login(self):
-        """Show login dialog."""
         dialog = LoginDialog(self)
         if dialog.exec():
             self.session_key = dialog.get_key()
-            self.status_bar.showMessage(f"Logged in | Database: {db.config.DB_PATH}")
+            self.status_bar.showMessage(f"Unlocked  ·  {db.config.DB_PATH}")
             logger.info("User logged in successfully")
         else:
-            # No login, exit
             self.close()
-    
+
     def logout(self):
-        """Logout and show login dialog."""
         self.session_key = None
-        self.status_bar.showMessage("Logged out")
+        self.status_bar.showMessage("Locked")
         logger.info("User logged out")
         self.show_login()
-    
+
     def check_session(self):
-        """Check session validity (timeout)."""
-        # TODO: Implement session timeout logic
         pass
-    
+
     def show_about(self):
-        """Show about dialog."""
         QMessageBox.about(
             self,
             "About CiscoMan",
-            "<h2>CiscoMan v2.0.0</h2>"
-            "<p>Native Windows desktop application for managing Cisco network devices.</p>"
-            "<p><b>Features:</b></p>"
-            "<ul>"
-            "<li>Network Scanner</li>"
-            "<li>Device Inventory</li>"
-            "<li>Control Center (CLI automation)</li>"
-            "<li>Quick & Tunnel Wizards</li>"
-            "<li>Config Backups & Diff</li>"
-            "<li>Audit Logging</li>"
-            "<li>Offline Demo Mode</li>"
-            "</ul>"
-            "<p>Built with Python, PySide6, and Netmiko.</p>"
+            "<h2>CiscoMan 2.0</h2>"
+            "<p>Native Windows app for Cisco and H3C network operations.</p>"
+            "<p>Scanner, inventory, Control Center, Tunnel Wizard, backups, and audit.</p>",
         )
-    
+
     def get_key(self) -> bytes:
-        """Get the current session encryption key."""
         return self.session_key

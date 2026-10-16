@@ -89,6 +89,7 @@ def scan_network(
     timeout: float = config.SCAN_TIMEOUT,
     workers: int = config.SCAN_WORKERS,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    host_found_callback: Optional[Callable[[str], None]] = None,
 ) -> list[str]:
     """Return IPs with the given TCP port open. progress_callback(done, total, ip)."""
     targets = expand_targets(cidr_or_range)
@@ -102,6 +103,8 @@ def scan_network(
             done += 1
             if fut.result():
                 alive.append(ip)
+                if host_found_callback:
+                    host_found_callback(ip)
             if progress_callback:
                 progress_callback(done, total, ip)
     return sorted(alive, key=lambda x: ipaddress.ip_address(x))

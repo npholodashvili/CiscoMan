@@ -9,6 +9,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon, QMenu
 from PySide6.QtCore import Qt, QSharedMemory
 from PySide6.QtGui import QIcon, QAction
 
+from ciscoman_gui.theme import apply_fluent_theme
+
 # Configure logging
 from ciscoman_core import config
 
@@ -49,6 +51,12 @@ def main():
         app.setApplicationName("CiscoMan")
         app.setOrganizationName("CiscoMan Project")
         app.setApplicationVersion("2.0.0")
+        apply_fluent_theme(app)
+
+        icon_path = Path(__file__).resolve().parent / "icon.ico"
+        app_icon = QIcon(str(icon_path)) if icon_path.is_file() else QIcon()
+        if not app_icon.isNull():
+            app.setWindowIcon(app_icon)
         
         # Single instance lock
         is_first, shared_mem = check_single_instance()
@@ -72,7 +80,8 @@ def main():
         # System tray icon
         if QSystemTrayIcon.isSystemTrayAvailable():
             tray_icon = QSystemTrayIcon(app)
-            # tray_icon.setIcon(QIcon("path/to/icon.png"))  # TODO: Add icon
+            if not app_icon.isNull():
+                tray_icon.setIcon(app_icon)
             
             tray_menu = QMenu()
             show_action = QAction("Show", tray_menu)

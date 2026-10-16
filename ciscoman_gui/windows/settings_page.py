@@ -99,8 +99,12 @@ class SettingsPage(QWidget):
         discovery_layout = QVBoxLayout(discovery_group)
         
         discovery_layout.addWidget(QLabel(
-            "MAC/OUI identification can use online lookup as fallback (macvendors.com API)."
+            "MAC/OUI uses a bundled offline IEEE database. Online lookup (macvendors.com) "
+            "is off by default, rate-limited, and cached."
         ))
+        restore_oui_btn = QPushButton("Restore bundled OUI database")
+        restore_oui_btn.clicked.connect(self.restore_oui_db)
+        discovery_layout.addWidget(restore_oui_btn)
         
         self.online_oui_cb = QCheckBox("Enable online OUI vendor lookup (opt-in)")
         self.online_oui_cb.toggled.connect(self.toggle_online_oui)
@@ -180,6 +184,20 @@ class SettingsPage(QWidget):
             logger.error(f"Failed to change password: {e}")
             QMessageBox.critical(self, "Error", f"Failed to change password:\n{e}")
     
+    def restore_oui_db(self):
+        """Copy the packaged OUI database into the user data folder."""
+        try:
+            from ciscoman_core import mac_discovery
+            path = mac_discovery.ensure_oui_db()
+            if path is None:
+                QMessageBox.warning(self, "OUI database", "Bundled OUI database was not found.")
+                return
+            dest = config.get_data_dir() / "oui.db"
+            dest.write_bytes(path.read_bytes())
+            QMessageBox.information(self, "OUI database", f"Restored to:\n{dest}")
+        except Exception as e:
+            QMessageBox.critical(self, "OUI database", str(e))
+
     def toggle_online_oui(self, checked: bool):
         """Toggle online OUI lookup."""
         try:

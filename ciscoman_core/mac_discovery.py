@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import subprocess
-import re
 import logging
 import sqlite3
+import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
 
 from ciscoman_core import config
+from ciscoman_core import win_native
 
 logger = logging.getLogger(__name__)
 
@@ -26,274 +27,170 @@ class MACInfo:
 
 def normalize_mac(mac: str) -> str:
     """Normalize MAC address to XX:XX:XX:XX:XX:XX format."""
-    # Remove all non-hex characters
-    clean = re.sub(r'[^0-9a-fA-F]', '', mac)
+    import re
+
+    clean = re.sub(r"[^0-9a-fA-F]", "", mac)
     if len(clean) != 12:
         raise ValueError(f"Invalid MAC address: {mac}")
-    
-    # Format as XX:XX:XX:XX:XX:XX
-    return ':'.join(clean[i:i+2].upper() for i in range(0, 12, 2))
+    return ":".join(clean[i : i + 2].upper() for i in range(0, 12, 2))
 
 
 def get_oui_prefix(mac: str) -> str:
     """Extract OUI prefix (first 6 hex digits) from MAC."""
-    normalized = normalize_mac(mac)
-    return normalized.replace(':', '')[:6].upper()
+    return normalize_mac(mac).replace(":", "")[:6].upper()
+
+
+def find_oui_db() -> Optional[Path]:
+    """Locate the bundled or user-upgraded IEEE OUI database.
+
+    Search order:
+    1. %LOCALAPPDATA%\\CiscoMan\\oui.db (user-updated)
+    2. PyInstaller _MEIPASS/ciscoman_core/oui.db
+    3. Next to the frozen executable
+    4. Source tree ciscoman_core/oui.db
+    """
+    candidates: list[Path] = [
+        config.get_data_dir() / "oui.db",
+    ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "ciscoman_core" / "oui.db")
+        candidates.append(Path(meipass) / "oui.db")
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "ciscoman_core" / "oui.db")
+        candidates.append(Path(sys.executable).resolve().parent / "oui.db")
+    candidates.append(Path(__file__).resolve().parent / "oui.db")
+
+    for path in candidates:
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def ensure_oui_db() -> Optional[Path]:
+    """Copy the bundled OUI DB into the user data dir so Settings can update it."""
+    found = find_oui_db()
+    if found is None:
+        return None
+    dest = config.get_data_dir() / "oui.db"
+    if found.resolve() != dest.resolve():
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if not dest.exists():
+                dest.write_bytes(found.read_bytes())
+                return dest
+        except OSError as exc:
+            logger.debug("Could not copy OUI db to data dir: %s", exc)
+    return found
 
 
 def get_arp_table_windows() -> dict[str, str]:
-    """Get ARP table from Windows using Get-NetNeighbor.
-    
-    Returns dict of {ip: mac}.
-    """
-    result = {}
-    try:
-        # Try PowerShell Get-NetNeighbor first (Windows 8+)
-        output = subprocess.check_output(
-            ['powershell', '-Command', 
-             'Get-NetNeighbor | Where-Object {$_.State -eq "Reachable" -or $_.State -eq "Stale"} | Select-Object IPAddress, LinkLayerAddress'],
-            text=True,
-            timeout=10
-        )
-        
-        # Parse output
-        for line in output.splitlines():
-            line = line.strip()
-            if not line or 'IPAddress' in line or '---' in line:
-                continue
-            
-            # Line format: "192.168.1.1    AA-BB-CC-DD-EE-FF"
-            parts = line.split()
-            if len(parts) >= 2:
-                ip = parts[0]
-                mac = parts[1]
-                try:
-                    normalized = normalize_mac(mac)
-                    result[ip] = normalized
-                except ValueError:
-                    continue
-                    
-    except Exception as e:
-        logger.debug(f"Get-NetNeighbor failed, trying arp -a: {e}")
-        
-        try:
-            # Fall back to arp -a
-            output = subprocess.check_output(['arp', '-a'], text=True, timeout=10)
-            
-            # Parse arp -a output
-            for line in output.splitlines():
-                # Format: "  192.168.1.1           aa-bb-cc-dd-ee-ff     dynamic"
-                match = re.search(r'(\d+\.\d+\.\d+\.\d+)\s+([\da-fA-F\-:]+)', line)
-                if match:
-                    ip = match.group(1)
-                    mac = match.group(2)
-                    try:
-                        normalized = normalize_mac(mac)
-                        result[ip] = normalized
-                    except ValueError:
-                        continue
-        except Exception as e:
-            logger.error(f"Failed to get ARP table: {e}")
-    
-    return result
+    """Compatibility wrapper — reads the neighbor table once, no PowerShell."""
+    return win_native.get_arp_table()
+
+
+def get_arp_table() -> dict[str, str]:
+    return win_native.get_arp_table()
 
 
 def ping_to_populate_arp(ip: str, timeout: int = 1) -> bool:
-    """Ping an IP to populate ARP cache. Returns True if reachable."""
-    try:
-        subprocess.run(
-            ['ping', '-n', '1', '-w', str(timeout * 1000), ip],
-            capture_output=True,
-            timeout=timeout + 1
-        )
-        return True
-    except Exception:
-        return False
+    """ICMP echo with no console window (IcmpSendEcho / hidden ping)."""
+    return win_native.icmp_echo(ip, timeout_ms=max(200, int(timeout * 1000)))
 
 
 def lookup_oui_offline(mac: str) -> Optional[str]:
-    """Look up vendor from local OUI database.
-    
-    Returns vendor name or None if not found.
-    """
+    """Look up vendor from the local OUI database."""
     try:
         oui = get_oui_prefix(mac)
-        
-        # Try multiple locations for OUI database
-        # 1. User data directory
-        db_path = config.get_data_dir() / "oui.db"
-        
-        # 2. Bundled with ciscoman_core (for PyInstaller)
-        if not db_path.exists():
-            from pathlib import Path
-            import sys
-            
-            # PyInstaller extracts to sys._MEIPASS
-            if hasattr(sys, '_MEIPASS'):
-                db_path = Path(sys._MEIPASS) / "ciscoman_core" / "oui.db"
-            else:
-                # Running from source
-                db_path = Path(__file__).parent / "oui.db"
-        
-        if not db_path.exists():
-            logger.warning(f"OUI database not found at {db_path}, cannot perform offline lookup")
+        db_path = ensure_oui_db()
+        if db_path is None:
+            logger.warning("OUI database not found, cannot perform offline lookup")
             return None
-        
+
         conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT vendor FROM oui WHERE prefix = ?", (oui,))
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row:
-            return row[0]
-        
-        return None
-        
+        try:
+            row = conn.execute("SELECT vendor FROM oui WHERE prefix = ?", (oui,)).fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
     except Exception as e:
-        logger.error(f"OUI offline lookup failed: {e}")
+        logger.error("OUI offline lookup failed: %s", e)
         return None
 
 
 def lookup_oui_online(mac: str) -> Optional[str]:
-    """Look up vendor from online API (macvendors.com).
-    
-    Returns vendor name or None if not found.
-    Rate limited and cached.
-    """
+    """Look up vendor from macvendors.com (opt-in, rate-limited, cached)."""
     try:
         import requests
-        import time
-        
-        # Check cache first
+
         oui = get_oui_prefix(mac)
         cached = _get_cached_oui(oui)
         if cached:
             return cached
-        
-        # Rate limit: max 1 request per second
+
         time.sleep(1.1)
-        
-        # Query macvendors.com API
-        url = f"https://api.macvendors.com/{mac}"
-        response = requests.get(url, timeout=5)
-        
+        response = requests.get(f"https://api.macvendors.com/{mac}", timeout=5)
         if response.status_code == 200:
             vendor = response.text.strip()
             if vendor and "error" not in vendor.lower():
                 _cache_oui(oui, vendor)
                 return vendor
-        
         return None
-        
     except Exception as e:
-        logger.debug(f"OUI online lookup failed: {e}")
+        logger.debug("OUI online lookup failed: %s", e)
         return None
 
 
 def _get_cached_oui(oui: str) -> Optional[str]:
-    """Get cached OUI vendor from database."""
     try:
         conn = sqlite3.connect(str(config.DB_PATH))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT vendor, timestamp FROM oui_cache
-            WHERE prefix = ?
-        """, (oui,))
-        
-        row = cursor.fetchone()
-        conn.close()
-        
+        try:
+            row = conn.execute(
+                "SELECT vendor, timestamp FROM oui_cache WHERE prefix = ?", (oui,)
+            ).fetchone()
+        finally:
+            conn.close()
         if row:
             vendor, timestamp = row
-            # Cache valid for 90 days
-            import time
             if time.time() - timestamp < 90 * 86400:
                 return vendor
-        
         return None
-        
     except Exception:
         return None
 
 
-def _cache_oui(oui: str, vendor: str):
-    """Cache OUI vendor in database."""
+def _cache_oui(oui: str, vendor: str) -> None:
     try:
-        import time
         conn = sqlite3.connect(str(config.DB_PATH))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT OR REPLACE INTO oui_cache (prefix, vendor, timestamp)
-            VALUES (?, ?, ?)
-        """, (oui, vendor, int(time.time())))
-        
-        conn.commit()
-        conn.close()
-        
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO oui_cache (prefix, vendor, timestamp) VALUES (?, ?, ?)",
+                (oui, vendor, int(time.time())),
+            )
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
-        logger.debug(f"Failed to cache OUI: {e}")
+        logger.debug("Failed to cache OUI: %s", e)
 
 
 def identify_mac(mac: str, online_enabled: bool = False) -> Optional[MACInfo]:
-    """Identify vendor from MAC address.
-    
-    Args:
-        mac: MAC address in any format
-        online_enabled: Whether to use online lookup as fallback
-        
-    Returns:
-        MACInfo or None if no vendor found
-    """
+    """Identify vendor from a MAC using the offline DB, then optional online."""
     try:
         normalized = normalize_mac(mac)
     except ValueError as e:
-        logger.error(f"Invalid MAC address: {e}")
+        logger.error("Invalid MAC address: %s", e)
         return None
-    
-    # Try offline database first
+
     vendor = lookup_oui_offline(normalized)
     if vendor:
-        return MACInfo(
-            mac=normalized,
-            vendor=vendor,
-            source="oui-db",
-            confidence=0.9
-        )
-    
-    # Try online if enabled
+        return MACInfo(mac=normalized, vendor=vendor, source="oui-db", confidence=0.9)
+
     if online_enabled:
         vendor = lookup_oui_online(normalized)
         if vendor:
-            return MACInfo(
-                mac=normalized,
-                vendor=vendor,
-                source="oui-online",
-                confidence=0.85
-            )
-    
+            return MACInfo(mac=normalized, vendor=vendor, source="oui-online", confidence=0.85)
     return None
-
-
-def init_oui_cache_table():
-    """Initialize OUI cache table in database."""
-    try:
-        conn = sqlite3.connect(str(config.DB_PATH))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS oui_cache (
-                prefix TEXT PRIMARY KEY,
-                vendor TEXT NOT NULL,
-                timestamp INTEGER NOT NULL
-            )
-        """)
-        
-        conn.commit()
-        conn.close()
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize OUI cache table: {e}")

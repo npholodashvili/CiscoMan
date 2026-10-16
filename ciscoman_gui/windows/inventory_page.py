@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from ciscoman_core import database as db
+from ciscoman_core import database as db, config
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +48,13 @@ class InventoryPage(QWidget):
         
         # Device table
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(10)
         self.table.setHorizontalHeaderLabels([
-            "ID", "Name", "IP", "Type", "Location", "Group", "Username"
+            "ID", "Name", "IP", "Type", "Vendor", "MAC",
+            "Location", "Group", "Username", "Source",
         ])
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(self.table.SelectRows)
         layout.addWidget(self.table)
         
         # Load initial data
@@ -68,9 +71,12 @@ class InventoryPage(QWidget):
                 self.table.setItem(row, 1, QTableWidgetItem(device["name"]))
                 self.table.setItem(row, 2, QTableWidgetItem(device["ip"]))
                 self.table.setItem(row, 3, QTableWidgetItem(device["device_type"]))
-                self.table.setItem(row, 4, QTableWidgetItem(device["location"]))
-                self.table.setItem(row, 5, QTableWidgetItem(device["group_name"]))
-                self.table.setItem(row, 6, QTableWidgetItem(device["username"]))
+                self.table.setItem(row, 4, QTableWidgetItem(device.get("vendor") or ""))
+                self.table.setItem(row, 5, QTableWidgetItem(device.get("mac") or ""))
+                self.table.setItem(row, 6, QTableWidgetItem(device["location"]))
+                self.table.setItem(row, 7, QTableWidgetItem(device["group_name"]))
+                self.table.setItem(row, 8, QTableWidgetItem(device["username"]))
+                self.table.setItem(row, 9, QTableWidgetItem(device.get("ident_source") or ""))
             
             self.table.resizeColumnsToContents()
             logger.info(f"Loaded {len(devices)} devices")

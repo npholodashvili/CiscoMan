@@ -109,7 +109,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(devices)").fetchall()}
     if "is_demo" not in cols:
         conn.execute("ALTER TABLE devices ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0")
-    
+    for col, decl in (
+        ("mac", "TEXT DEFAULT ''"),
+        ("vendor", "TEXT DEFAULT ''"),
+        ("model", "TEXT DEFAULT ''"),
+        ("os_version", "TEXT DEFAULT ''"),
+        ("ident_source", "TEXT DEFAULT ''"),
+        ("ident_confidence", "REAL DEFAULT 0"),
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE devices ADD COLUMN {col} {decl}")
+
     # Initialize default settings
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('online_oui_lookup', '0')")
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('snmp_community', 'public')")
@@ -252,7 +262,14 @@ def upsert_device(key: bytes, db_path: str = config.DB_PATH, **fields) -> int:
     if existing:
         update_device(key, existing["id"], db_path=db_path, **fields)
         return int(existing["id"])
-    return add_device(key, db_path=db_path, **fields)
+    allowed = {
+        "name", "ip", "username", "password", "secret", "device_type",
+        "port", "location", "group_name", "is_demo",
+    }
+    insert = {k: v for k, v in fields.items() if k in allowed}
+    new_id = add_device(key, db_path=db_path, **insert)
+    update_device(key, new_id, db_path=db_path, **fields)
+    return new_id
 
 
 def update_device(
@@ -260,7 +277,10 @@ def update_device(
 ) -> None:
     columns = []
     values = []
-    simple = {"name", "ip", "device_type", "port", "location", "group_name", "username"}
+    simple = {
+        "name", "ip", "device_type", "port", "location", "group_name", "username",
+        "mac", "vendor", "model", "os_version", "ident_source", "ident_confidence",
+    }
     for col in simple:
         if col in fields and fields[col] is not None:
             columns.append(f"{col} = ?")
@@ -293,7 +313,8 @@ def list_devices(db_path: str = config.DB_PATH) -> list[dict]:
         rows = conn.execute(
             """
             SELECT id, name, ip, device_type, port, location, group_name, username,
-                   created_at, last_seen, is_demo
+                   created_at, last_seen, is_demo, mac, vendor, model, os_version,
+                   ident_source, ident_confidence
             FROM devices ORDER BY location, group_name, name, ip
             """
         ).fetchall()

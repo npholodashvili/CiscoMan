@@ -27,6 +27,12 @@ def test_get_oui_prefix():
     assert mac_discovery.get_oui_prefix("aa-bb-cc-dd-ee-ff") == "AABBCC"
 
 
+def test_find_oui_db_bundled():
+    path = mac_discovery.find_oui_db()
+    assert path is not None
+    assert path.is_file()
+
+
 def test_lookup_oui_offline():
     """Test offline OUI lookup with bundled database."""
     # Cisco MAC
