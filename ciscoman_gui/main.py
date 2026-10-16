@@ -1,8 +1,14 @@
 """CiscoMan Windows native desktop application entry point."""
 
 import sys
+
+# Frozen --selftest must not open a GUI; run before Qt is constructed.
+if __name__ == "__main__" and "--selftest" in sys.argv:
+    from ciscoman_core.selftest import run_selftest
+
+    raise SystemExit(run_selftest())
+
 import logging
-import socket
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon, QMenu
@@ -10,6 +16,7 @@ from PySide6.QtCore import Qt, QSharedMemory
 from PySide6.QtGui import QIcon, QAction
 
 from ciscoman_gui.theme import apply_fluent_theme
+from ciscoman_gui.crash_guard import install_crash_guards
 
 # Configure logging
 from ciscoman_core import config
@@ -52,6 +59,7 @@ def main():
         app.setOrganizationName("CiscoMan Project")
         app.setApplicationVersion("2.0.0")
         apply_fluent_theme(app)
+        install_crash_guards(config.LOG_DIR, app)
 
         icon_path = Path(__file__).resolve().parent / "icon.ico"
         app_icon = QIcon(str(icon_path)) if icon_path.is_file() else QIcon()

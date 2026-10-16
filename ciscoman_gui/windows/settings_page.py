@@ -114,11 +114,27 @@ class SettingsPage(QWidget):
         online_enabled = db.get_setting("online_oui_lookup", "0") == "1"
         self.online_oui_cb.setChecked(online_enabled)
         
-        discovery_layout.addWidget(QLabel("SNMP community string for device discovery:"))
+        discovery_layout.addWidget(QLabel("SNMP community (v2c) for sysDescr / sysName / sysObjectID:"))
         self.snmp_community_input = QLineEdit()
         self.snmp_community_input.setText(db.get_setting("snmp_community", "public"))
         self.snmp_community_input.setPlaceholderText("public")
         discovery_layout.addWidget(self.snmp_community_input)
+
+        from PySide6.QtWidgets import QComboBox
+        discovery_layout.addWidget(QLabel("SNMP version:"))
+        self.snmp_version = QComboBox()
+        self.snmp_version.addItems(["2c", "3"])
+        self.snmp_version.setCurrentText(db.get_setting("snmp_version", "2c"))
+        discovery_layout.addWidget(self.snmp_version)
+        discovery_layout.addWidget(QLabel("SNMPv3 user (optional; discovery still uses v2c community):"))
+        self.snmp_user_input = QLineEdit()
+        self.snmp_user_input.setText(db.get_setting("snmp_user", ""))
+        discovery_layout.addWidget(self.snmp_user_input)
+        discovery_layout.addWidget(QLabel("SNMPv3 auth key (optional):"))
+        self.snmp_auth_input = QLineEdit()
+        self.snmp_auth_input.setEchoMode(QLineEdit.Password)
+        self.snmp_auth_input.setText(db.get_setting("snmp_auth", ""))
+        discovery_layout.addWidget(self.snmp_auth_input)
         
         save_snmp_btn = QPushButton("Save SNMP Settings")
         save_snmp_btn.clicked.connect(self.save_snmp_settings)
@@ -211,6 +227,9 @@ class SettingsPage(QWidget):
         try:
             community = self.snmp_community_input.text().strip() or "public"
             db.set_setting("snmp_community", community)
+            db.set_setting("snmp_version", self.snmp_version.currentText())
+            db.set_setting("snmp_user", self.snmp_user_input.text().strip())
+            db.set_setting("snmp_auth", self.snmp_auth_input.text())
             QMessageBox.information(self, "Saved", "SNMP settings saved.")
             logger.info("SNMP settings saved")
         except Exception as e:

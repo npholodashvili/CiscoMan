@@ -44,15 +44,20 @@ def test_run_hidden_sets_create_no_window_and_hidden_startupinfo():
         result.stderr = ""
         return result
 
+    class FakeSI:
+        def __init__(self):
+            self.dwFlags = 0
+            self.wShowWindow = 0
+
     with patch.object(subprocess, "run", side_effect=fake_run):
-        with patch.object(os, "name", "nt"):
-            # Force Windows branch even on Linux CI
-            orig = win_native.os.name
-            try:
-                win_native.os.name = "nt"
-                run_hidden(["arp", "-a"], timeout=2)
-            finally:
-                win_native.os.name = orig
+        with patch.object(subprocess, "STARTUPINFO", FakeSI, create=True):
+            with patch.object(os, "name", "nt"):
+                orig = win_native.os.name
+                try:
+                    win_native.os.name = "nt"
+                    run_hidden(["arp", "-a"], timeout=2)
+                finally:
+                    win_native.os.name = orig
 
     assert captured["creationflags"] == CREATE_NO_WINDOW
     assert captured["startupinfo"] is not None

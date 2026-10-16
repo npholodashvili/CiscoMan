@@ -13,13 +13,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
-import config
-import simulator
+try:
+    from ciscoman_core import config
+    from ciscoman_core import simulator
+except ImportError:  # flat Streamlit layout
+    import config
+    import simulator
 
 try:
-    import actions
+    from ciscoman_core import actions
 except ImportError:
-    actions = None  # pragma: no cover
+    try:
+        import actions
+    except ImportError:
+        actions = None  # pragma: no cover
 
 try:
     from ntc_templates.parse import parse_output

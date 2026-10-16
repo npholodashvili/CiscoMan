@@ -20,7 +20,10 @@ import time
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
-import config
+try:
+    from ciscoman_core import config
+except ImportError:
+    import config
 
 SCHEMA_VERSION = 1
 
@@ -123,6 +126,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # Initialize default settings
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('online_oui_lookup', '0')")
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('snmp_community', 'public')")
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('snmp_version', '2c')")
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('snmp_user', '')")
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('snmp_auth', '')")
     if "location" not in cols:
         conn.execute("ALTER TABLE devices ADD COLUMN location TEXT NOT NULL DEFAULT ''")
 

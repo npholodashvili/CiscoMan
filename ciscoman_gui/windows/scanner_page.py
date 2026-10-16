@@ -15,13 +15,13 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QSpinBox, QMessageBox, QProgressBar, QTableWidget,
     QTableWidgetItem, QHeaderView, QMenu, QAbstractItemView, QInputDialog,
+    QComboBox,
 )
 
 from ciscoman_core import config, database as db
 from ciscoman_core.device_identification import DeviceIdentity
 from ciscoman_core.win_native import icmp_echo
-from ciscoman_gui.workers.device_worker import ScanWorker
-from ciscoman_gui.workers.identification_worker import IdentificationWorker
+from ciscoman_gui.workers import ScanWorker, IdentificationWorker, retain_worker
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,10 @@ class ScannerPage(QWidget):
         title = QLabel("Scanner")
         title.setStyleSheet("font-size: 22px; font-weight: 600;")
         layout.addWidget(title)
-        sub = QLabel("Privilege-free TCP scan. Results stream in; identify uses one ARP read plus optional SNMP.")
+        sub = QLabel(
+            "Privilege-free TCP scan. Routed subnets have no local ARP — "
+            "Identify uses SNMP, SSH/HTTP banners, and optional switch ARP."
+        )
         sub.setStyleSheet("color: #C8C8C8;")
         sub.setWordWrap(True)
         layout.addWidget(sub)
@@ -129,6 +132,17 @@ class ScannerPage(QWidget):
         btns.addWidget(self.copy_btn)
         btns.addStretch()
         layout.addLayout(btns)
+
+        arp_row = QHBoxLayout()
+        arp_row.addWidget(QLabel("Query ARP from"))
+        self.switch_combo = QComboBox()
+        self.switch_combo.setMinimumWidth(260)
+        arp_row.addWidget(self.switch_combo, 1)
+        refresh_sw = QPushButton("Refresh devices")
+        refresh_sw.clicked.connect(self.refresh_switch_combo)
+        arp_row.addWidget(refresh_sw)
+        layout.addLayout(arp_row)
+        self.refresh_switch_combo()
 
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Filter"))
@@ -193,11 +207,11 @@ class ScannerPage(QWidget):
         self.progress.setMaximum(100)
         self.progress.setValue(0)
 
-        self.worker = ScanWorker(target, port, timeout)
-        self.worker.signals.progress.connect(self.on_scan_progress)
-        self.worker.signals.host_found.connect(self.on_host_found)
-        self.worker.signals.finished.connect(self.on_scan_finished)
-        self.worker.signals.error.connect(self.on_scan_error)
+        self.worker = retain_worker(self, ScanWorker(target, port, timeout))
+        self.worker.progress.connect(self.on_scan_progress)
+        self.worker.host_found.connect(self.on_host_found)
+        self.worker.scan_finished.connect(self.on_scan_finished)
+        self.worker.error.connect(self.on_scan_error)
         self.worker.start()
 
     def cancel_scan(self):
@@ -231,7 +245,6 @@ class ScannerPage(QWidget):
         self.cancel_btn.setEnabled(False)
         self.identify_btn.setEnabled(len(self._rows) > 0)
         self.table.setSortingEnabled(True)
-        self.worker = None
         self.summary_label.setText(f"{len(self._rows)} host(s) with port {self.port_spin.value()} open")
         self._sync_buttons()
 
@@ -240,7 +253,16 @@ class ScannerPage(QWidget):
         self.progress.setVisible(False)
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.worker = None
+
+    def refresh_switch_combo(self):
+        self.switch_combo.clear()
+        self.switch_combo.addItem("Local ARP only (this PC)", None)
+        try:
+            for dev in db.list_devices():
+                label = f"{dev['name']} ({dev['ip']}) — {dev.get('device_type') or ''}"
+                self.switch_combo.addItem(label, dev["id"])
+        except Exception:
+            logger.debug("Could not list devices for ARP combo", exc_info=True)
 
     # --- identify -------------------------------------------------------------
 
@@ -254,10 +276,23 @@ class ScannerPage(QWidget):
         self.progress.setVisible(True)
         self.progress.setMaximum(len(ips))
         self.progress.setValue(0)
-        self.summary_label.setText(f"Identifying {len(ips)} host(s) — one ARP read, no console windows…")
+        self.summary_label.setText(
+            f"Identifying {len(ips)} host(s) via SNMP / SSH / HTTP"
+            + (" and switch ARP…" if self.switch_combo.currentData() else "…")
+        )
 
-        self.identify_worker = IdentificationWorker(ips)
+        switch_dev = None
+        dev_id = self.switch_combo.currentData()
+        if dev_id:
+            key = self.main_window.get_key()
+            if key:
+                switch_dev = db.get_device_with_credentials(key, int(dev_id))
+
+        self.identify_worker = retain_worker(
+            self, IdentificationWorker(ips, switch_device=switch_dev)
+        )
         self.identify_worker.progress.connect(self.on_identification_progress)
+        self.identify_worker.switch_arp_note.connect(self.summary_label.setText)
         self.identify_worker.finished.connect(self.on_identification_finished)
         self.identify_worker.error.connect(self.on_identification_error)
         self.identify_worker.start()
@@ -289,8 +324,10 @@ class ScannerPage(QWidget):
         else:
             row.status = "No identity"
         row.source = f"{ident.source_label} · {ident.confidence:.0%}"
-        if ident.note and not ident.identified:
-            row.source = ident.source_label
+        if ident.note:
+            row.source = f"{ident.source_label} — {ident.note}" if not ident.identified else (
+                f"{ident.source_label} · {ident.confidence:.0%}"
+            )
         self._refresh_row(ident.ip)
 
     def on_identification_finished(self):
@@ -304,7 +341,6 @@ class ScannerPage(QWidget):
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.identify_btn.setEnabled(True)
-        self.identify_worker = None
         self._sync_buttons()
 
     def on_identification_error(self, error_msg: str):
@@ -313,7 +349,6 @@ class ScannerPage(QWidget):
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.identify_btn.setEnabled(True)
-        self.identify_worker = None
 
     # --- table helpers --------------------------------------------------------
 
@@ -377,7 +412,9 @@ class ScannerPage(QWidget):
 
     def _sync_buttons(self):
         has_rows = self.table.rowCount() > 0
-        self.identify_btn.setEnabled(has_rows and self.worker is None and self.identify_worker is None)
+        scan_busy = bool(self.worker and self.worker.isRunning())
+        ident_busy = bool(self.identify_worker and self.identify_worker.isRunning())
+        self.identify_btn.setEnabled(has_rows and not scan_busy and not ident_busy)
         self.add_btn.setEnabled(bool(self._selected_ips()))
 
     # --- context menu / actions ----------------------------------------------

@@ -103,9 +103,9 @@ def test_demo_device_workflow(qapp, qtbot, mocker):
     else:
         key = db.verify_master_password("test_password_12345")
     
-    # Add demo devices
-    added = db.seed_demo_devices(key)
-    assert added > 0
+    # Add demo devices (idempotent — earlier tests may have seeded already)
+    db.seed_demo_devices(key)
+    assert any(d.get("is_demo") for d in db.list_devices())
     
     # Mock the login dialog
     mocker.patch('ciscoman_gui.windows.main_window.LoginDialog.exec', return_value=True)

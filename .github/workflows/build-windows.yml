@@ -27,12 +27,30 @@ jobs:
         pip install -r requirements-pinned.txt
     
     - name: Run tests
+      env:
+        QT_QPA_PLATFORM: offscreen
+        CI: "true"
       run: |
         pytest tests/ -v --tb=short
     
     - name: Build executable with PyInstaller
       run: |
         python -m PyInstaller ciscoman.spec
+
+    - name: Frozen selftest
+      run: |
+        $exe = "dist\CiscoMan\CiscoMan.exe"
+        if (!(Test-Path $exe)) { Write-Error "exe missing"; exit 1 }
+        $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru -NoNewWindow
+        Write-Host "selftest exit $($p.ExitCode)"
+        $result = "dist\CiscoMan\selftest-result.txt"
+        if (Test-Path $result) { Write-Host "--- selftest-result.txt ---"; Get-Content $result }
+        if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+        if (!(Test-Path $result) -or ((Get-Content $result -Raw) -notmatch "PASSED")) {
+          Write-Error "frozen --selftest did not write a PASSED report"
+          exit 1
+        }
+      shell: powershell
     
     - name: Install Inno Setup via Chocolatey
       run: |

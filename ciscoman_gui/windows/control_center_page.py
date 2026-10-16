@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from ciscoman_core import actions, database as db
-from ciscoman_gui.workers.device_worker import DeviceWorker
+from ciscoman_core import network_utils as net
+from ciscoman_gui.workers import DeviceWorker, retain_worker
 
 logger = logging.getLogger(__name__)
 
@@ -296,17 +297,28 @@ class ControlCenterPage(QWidget):
         except Exception as e:
             self.preview_text.setPlainText(f"Error generating preview: {e}")
     
+    def _worker_busy(self) -> bool:
+        worker = self.worker
+        if worker is None:
+            return False
+        try:
+            return bool(worker.isRunning())
+        except RuntimeError:
+            return False
+
     def update_execute_button(self):
         """Enable/disable execute button."""
         can_execute = (
             self.current_action is not None and
             len(self.selected_devices) > 0
         )
-        self.execute_btn.setEnabled(can_execute and not self.worker)
+        self.execute_btn.setEnabled(can_execute and not self._worker_busy())
     
     def execute_action(self):
         """Execute the selected action on selected devices."""
         if not self.current_action or not self.selected_devices:
+            return
+        if self._worker_busy():
             return
         
         # Confirmation for config changes
@@ -360,26 +372,37 @@ class ControlCenterPage(QWidget):
         self.execute_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         
-        def progress_cb(done: int, total: int, result):
-            self.progress_bar.setValue(done)
-            if result.success:
-                self.results_area.append(f"✅ <b>{result.name}</b> ({result.ip}): Success<br>")
-            else:
-                self.results_area.append(f"❌ <b>{result.name}</b> ({result.ip}): {result.error}<br>")
-            
-            # Log to audit
-            cmd_str = "\n".join(cli_lines) if cli_lines else "write memory"
-            db.log_action(result.device_id, result.name, result.ip, self.current_action.id,
-                         cmd_str, "success" if result.success else "failed",
-                         result.output, result.error)
-            
-            if result.success:
-                db.mark_seen(result.device_id)
-        
-        self.worker = DeviceWorker(targets, task, progress_cb)
-        self.worker.signals.finished.connect(self.on_execution_finished)
-        self.worker.signals.error.connect(self.on_execution_error)
+        self._pending_cli = "\n".join(cli_lines) if cli_lines else "write memory"
+        self._pending_action_id = self.current_action.id
+
+        self.worker = retain_worker(self, DeviceWorker(targets, task))
+        self.worker.progress.connect(self._on_worker_progress)
+        self.worker.result.connect(self._on_worker_result)
+        self.worker.finished.connect(self.on_execution_finished)
+        self.worker.error.connect(self.on_execution_error)
         self.worker.start()
+
+    def _on_worker_progress(self, done: int, total: int):
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(done)
+
+    def _on_worker_result(self, result):
+        if result.success:
+            self.results_area.append(f"✅ <b>{result.name}</b> ({result.ip}): Success<br>")
+        else:
+            self.results_area.append(f"❌ <b>{result.name}</b> ({result.ip}): {result.error}<br>")
+        try:
+            db.log_action(
+                result.device_id, result.name, result.ip,
+                getattr(self, "_pending_action_id", ""),
+                getattr(self, "_pending_cli", ""),
+                "success" if result.success else "failed",
+                result.output, result.error,
+            )
+            if result.success and result.device_id:
+                db.mark_seen(result.device_id)
+        except Exception:
+            logger.exception("Failed to write audit row")
     
     def cancel_execution(self):
         """Cancel running execution."""
@@ -393,7 +416,6 @@ class ControlCenterPage(QWidget):
         self.progress_bar.setVisible(False)
         self.execute_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.worker = None
     
     def on_execution_error(self, error_msg: str):
         """Handle execution error."""
@@ -402,4 +424,3 @@ class ControlCenterPage(QWidget):
         self.progress_bar.setVisible(False)
         self.execute_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.worker = None

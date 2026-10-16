@@ -297,6 +297,17 @@ def _show_ip_route(s: dict) -> str:
     return "\n".join(lines)
 
 
+def _show_ip_arp(s: dict) -> str:
+    prefix = s["mgmt_ip"].rsplit(".", 1)[0]
+    lines = [
+        "Protocol  Address          Age (min)  Hardware Addr   Type   Interface",
+        f"Internet  {s['mgmt_ip']:<15}   -   0000.0c07.ac01  ARPA   Vlan1",
+        f"Internet  {prefix}.71           2   0000.0c11.2233  ARPA   Vlan110",
+        f"Internet  {prefix}.120          4   001b.213a.4c5d  ARPA   Vlan110",
+    ]
+    return "\n".join(lines)
+
+
 def _show_mac(s: dict) -> str:
     lines = [
         "          Mac Address Table",
@@ -447,6 +458,8 @@ _SHOW_TABLE = {
     "show ip route": _show_ip_route,
     "show mac address-table": _show_mac,
     "show mac-address-table": _show_mac,
+    "show ip arp": _show_ip_arp,
+    "display arp": _show_ip_arp,
     "show cdp neighbors detail": _show_cdp,
     "show cdp neighbors": _show_cdp,
     "show power inline": _show_power_inline,

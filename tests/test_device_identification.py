@@ -33,6 +33,7 @@ def test_identify_device_uses_provided_arp_table():
         online_oui=False,
         arp_table={"192.168.1.1": "00:00:0C:11:22:33"},
         local_nets=[],
+        try_fingerprint=False,
     )
     assert ident.mac == "00:00:0C:11:22:33"
     assert ident.vendor and "Cisco" in ident.vendor
@@ -49,6 +50,7 @@ def test_identify_device_remote_subnet_note():
         try_snmp=False,
         arp_table={},
         local_nets=[ipaddress.ip_network("192.168.1.0/24")],
+        try_fingerprint=False,
     )
     assert ident.mac is None
     assert ident.on_link is False
@@ -74,10 +76,32 @@ def test_identify_hosts_reads_arp_once(monkeypatch):
         ["10.0.0.1", "10.0.0.2"],
         try_snmp=False,
         max_workers=2,
+        try_fingerprint=False,
     )
     assert calls["n"] == 1
     assert results[0].vendor and "Cisco" in results[0].vendor
     assert results[1].mac is None
+
+
+def test_identify_device_switch_arp_on_remote_subnet():
+    """Routed hosts get MACs from a gateway/switch ARP table, then OUI."""
+    import ipaddress
+
+    ident = device_identification.identify_device(
+        "10.10.110.71",
+        try_snmp=False,
+        online_oui=False,
+        arp_table={},
+        extra_arp={"10.10.110.71": "00:00:0C:11:22:33"},
+        local_nets=[ipaddress.ip_network("10.10.40.0/23")],
+        try_fingerprint=False,
+    )
+    assert ident.on_link is False
+    assert ident.mac == "00:00:0C:11:22:33"
+    assert ident.vendor and "Cisco" in ident.vendor
+    assert "switch-arp" in ident.sources
+    assert ident.identified
+    assert "switch ARP" in ident.note or "Remote subnet" in ident.note
 
 
 def test_format_identification_summary():

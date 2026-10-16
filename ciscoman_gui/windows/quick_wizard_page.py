@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from ciscoman_core import actions, database as db, wizard
-from ciscoman_gui.workers.device_worker import DeviceWorker
+from ciscoman_gui.workers import DeviceWorker, retain_worker
 from ciscoman_core import network_utils as net
 
 logger = logging.getLogger(__name__)
@@ -168,10 +168,11 @@ class QuickWizardPage(QWidget):
         self.results.clear()
         self.results.append(f"Executing {self.current_intent.label} on {len(targets)} device(s)...\n")
         
-        def progress_cb(done, total, result):
-            status = "✅" if result.success else "❌"
-            self.results.append(f"{status} {result.name} ({result.ip})")
-        
-        self.worker = DeviceWorker(targets, task, progress_cb)
-        self.worker.signals.finished.connect(lambda: self.results.append("\nComplete."))
+        self.worker = retain_worker(self, DeviceWorker(targets, task))
+        self.worker.result.connect(
+            lambda result: self.results.append(
+                f"{'✅' if result.success else '❌'} {result.name} ({result.ip})"
+            )
+        )
+        self.worker.finished.connect(lambda: self.results.append("\nComplete."))
         self.worker.start()

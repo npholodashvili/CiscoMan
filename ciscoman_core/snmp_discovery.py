@@ -1,17 +1,40 @@
-"""SNMP-based device discovery and enrichment."""
+"""SNMP device discovery using a freeze-safe SNMPv2c client (no pysnmp)."""
 
 from __future__ import annotations
 
 import logging
-from typing import Optional, Dict
+import re
 from dataclasses import dataclass
+from typing import Optional
+
+from ciscoman_core import snmpv2c
 
 logger = logging.getLogger(__name__)
+
+SYS_DESCR = "1.3.6.1.2.1.1.1.0"
+SYS_OBJECT_ID = "1.3.6.1.2.1.1.2.0"
+SYS_NAME = "1.3.6.1.2.1.1.5.0"
+
+# IANA enterprise IDs under 1.3.6.1.4.1
+_ENTERPRISE_VENDOR = {
+    "9": "Cisco",
+    "11": "HP",
+    "2011": "Huawei",
+    "2636": "Juniper",
+    "25506": "H3C",
+    "14823": "Aruba",
+    "1916": "Extreme",
+    "4526": "Netgear",
+    "12356": "Fortinet",
+    "6876": "VMware",
+    "8072": "net-snmp",
+}
 
 
 @dataclass
 class SNMPInfo:
     """SNMP discovery information."""
+
     sys_descr: Optional[str] = None
     sys_name: Optional[str] = None
     sys_object_id: Optional[str] = None
@@ -21,135 +44,131 @@ class SNMPInfo:
     confidence: float = 0.7
 
 
+def snmp_available() -> bool:
+    """True when the freeze-safe SNMP client can build a packet."""
+    try:
+        return snmpv2c.bindings_ok()
+    except Exception:
+        return False
+
+
 def snmp_get(ip: str, community: str, oid: str, version: str = "2c", timeout: int = 2) -> Optional[str]:
-    """Perform SNMP GET operation.
-    
-    Args:
-        ip: Target IP address
-        community: SNMP community string
-        oid: OID to query
-        version: SNMP version ("1", "2c")
-        timeout: Timeout in seconds
-        
-    Returns:
-        Value as string or None if failed
-    """
+    """GET a single OID via SNMPv2c. ``version`` is accepted for API compat."""
+    _ = version
     try:
-        # Use pysnmp if available
-        from pysnmp.hlapi import (
-            getCmd, SnmpEngine, CommunityData, UdpTransportTarget,
-            ContextData, ObjectType, ObjectIdentity
-        )
-        
-        iterator = getCmd(
-            SnmpEngine(),
-            CommunityData(community, mpModel=0 if version == "1" else 1),
-            UdpTransportTarget((ip, 161), timeout=timeout),
-            ContextData(),
-            ObjectType(ObjectIdentity(oid))
-        )
-        
-        errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
-        
-        if errorIndication:
-            logger.debug(f"SNMP error: {errorIndication}")
-            return None
-        elif errorStatus:
-            logger.debug(f"SNMP error: {errorStatus.prettyPrint()}")
-            return None
-        else:
-            for varBind in varBinds:
-                return str(varBind[1])
-        
+        bindings = snmpv2c.snmp_get(ip, community, [oid], timeout=float(timeout))
+    except Exception as exc:
+        logger.debug("SNMP GET failed for %s %s: %s", ip, oid, exc)
         return None
-        
-    except ImportError:
-        logger.warning("pysnmp not available, SNMP discovery disabled")
+    if not bindings:
         return None
-    except Exception as e:
-        logger.debug(f"SNMP GET failed for {ip}: {e}")
-        return None
+    if oid in bindings:
+        return bindings[oid] or None
+    # Some agents return the OID without the trailing .0 instance
+    for key, val in bindings.items():
+        if key == oid or key.startswith(oid.rstrip(".0")):
+            return val or None
+    return next(iter(bindings.values()), None) or None
 
 
-def discover_via_snmp(ip: str, community: str = "public", version: str = "2c") -> Optional[SNMPInfo]:
-    """Discover device information via SNMP.
-    
-    Args:
-        ip: Target IP address
-        community: SNMP community string (default: "public")
-        version: SNMP version ("1", "2c", "3")
-        
-    Returns:
-        SNMPInfo or None if discovery failed
+def _vendor_from_object_id(oid: Optional[str]) -> Optional[str]:
+    if not oid:
+        return None
+    m = re.search(r"1\.3\.6\.1\.4\.1\.(\d+)", oid)
+    if not m:
+        return None
+    return _ENTERPRISE_VENDOR.get(m.group(1))
+
+
+def _parse_descr(sys_descr: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    descr_lower = sys_descr.lower()
+    vendor = model = os_version = None
+    if "cisco" in descr_lower:
+        vendor = "Cisco"
+        match = re.search(r"(catalyst\s*\S+|c\d{4}\S*|isr\d{4}|asr\d{4}|nexus\s*\d+|ws-c\S+)", descr_lower)
+        if match:
+            model = match.group(1).upper()
+        match = re.search(r"version\s+([\d.]+(?:\([\w]+\)[\w]*)?)", descr_lower)
+        if match:
+            os_version = match.group(1)
+    elif "juniper" in descr_lower or "junos" in descr_lower:
+        vendor = "Juniper"
+        match = re.search(r"(mx\d+|ex\d+|srx\d+|qfx\d+)", descr_lower)
+        if match:
+            model = match.group(1).upper()
+    elif "aruba" in descr_lower:
+        vendor = "Aruba"
+        match = re.search(r"aruba[\s\-]*([\w\d\-]+)", descr_lower)
+        if match:
+            model = match.group(1).upper()
+    elif "procurve" in descr_lower or re.search(r"\bhp\b", descr_lower):
+        vendor = "HP"
+    elif "h3c" in descr_lower or "comware" in descr_lower:
+        vendor = "H3C"
+        match = re.search(r"(s\d{4}\S*|msr\d{4})", descr_lower)
+        if match:
+            model = match.group(1).upper()
+    elif "huawei" in descr_lower or "vrp" in descr_lower:
+        vendor = "Huawei"
+    return vendor, model, os_version
+
+
+def discover_via_snmp(
+    ip: str,
+    community: str = "public",
+    version: str = "2c",
+    user: str = "",
+    auth_key: str = "",
+    timeout: float = 2.0,
+) -> Optional[SNMPInfo]:
+    """Discover sysDescr / sysName / sysObjectID.
+
+    SNMPv2c is always used for the wire GET (freeze-safe). If Settings asks
+    for v3 with a user but no auth, we still send v2c with the community so
+    discovery keeps working; v3 auth/priv is reported in the note layer.
     """
-    if version == "3":
-        logger.warning("SNMPv3 not yet implemented")
-        return None
-    
+    _ = (user, auth_key)
+    if version == "3" and user and auth_key:
+        logger.info("SNMPv3 auth is configured but this build uses v2c GET; set community for discovery")
+
     try:
-        # Query standard MIB-II objects
-        sys_descr = snmp_get(ip, community, "1.3.6.1.2.1.1.1.0", version)
-        sys_name = snmp_get(ip, community, "1.3.6.1.2.1.1.5.0", version)
-        sys_object_id = snmp_get(ip, community, "1.3.6.1.2.1.1.2.0", version)
-        
-        if not sys_descr and not sys_name:
-            return None
-        
-        # Parse vendor and model from sysDescr
-        vendor = None
-        model = None
-        os_version = None
-        
-        if sys_descr:
-            descr_lower = sys_descr.lower()
-            
-            # Cisco patterns
-            if "cisco" in descr_lower:
-                vendor = "Cisco"
-                # Extract model
-                match = re.search(r'(catalyst|c\d{4}|isr\d{4}|asr\d{4}|nexus\s*\d{4})', descr_lower)
-                if match:
-                    model = match.group(1).upper()
-                # Extract IOS version
-                match = re.search(r'version\s+([\d\.]+\([\w\)]+)', descr_lower)
-                if match:
-                    os_version = match.group(1)
-            
-            # Juniper patterns
-            elif "juniper" in descr_lower or "junos" in descr_lower:
-                vendor = "Juniper"
-                match = re.search(r'(mx\d+|ex\d+|srx\d+|qfx\d+)', descr_lower)
-                if match:
-                    model = match.group(1).upper()
-            
-            # HP/Aruba patterns
-            elif "hp" in descr_lower or "procurve" in descr_lower or "aruba" in descr_lower:
-                vendor = "HP/Aruba"
-                match = re.search(r'(procurve|aruba)[\s\-]*([\w\d\-]+)', descr_lower)
-                if match:
-                    model = match.group(2).upper()
-            
-            # H3C patterns
-            elif "h3c" in descr_lower or "comware" in descr_lower:
-                vendor = "H3C"
-                match = re.search(r'(s\d{4}|msr\d{4})', descr_lower)
-                if match:
-                    model = match.group(1).upper()
-        
-        return SNMPInfo(
-            sys_descr=sys_descr,
-            sys_name=sys_name,
-            sys_object_id=sys_object_id,
-            vendor=vendor,
-            model=model,
-            os_version=os_version,
-            confidence=0.85 if vendor else 0.5
+        bindings = snmpv2c.snmp_get(
+            ip, community, [SYS_DESCR, SYS_NAME, SYS_OBJECT_ID], timeout=timeout
         )
-        
-    except Exception as e:
-        logger.error(f"SNMP discovery failed for {ip}: {e}")
+    except Exception as exc:
+        logger.debug("SNMP discovery failed for %s: %s", ip, exc)
         return None
 
+    if not bindings:
+        return None
 
-# Import re for pattern matching
-import re
+    def _pick(*oids: str) -> Optional[str]:
+        for oid in oids:
+            if oid in bindings and bindings[oid]:
+                return bindings[oid]
+        for key, val in bindings.items():
+            if val and any(key.startswith(o.rsplit(".", 1)[0]) for o in oids):
+                return val
+        return None
+
+    sys_descr = _pick(SYS_DESCR)
+    sys_name = _pick(SYS_NAME)
+    sys_object_id = _pick(SYS_OBJECT_ID)
+    if not sys_descr and not sys_name and not sys_object_id:
+        return None
+
+    vendor = model = os_version = None
+    if sys_descr:
+        vendor, model, os_version = _parse_descr(sys_descr)
+    if not vendor:
+        vendor = _vendor_from_object_id(sys_object_id)
+
+    return SNMPInfo(
+        sys_descr=sys_descr,
+        sys_name=sys_name,
+        sys_object_id=sys_object_id,
+        vendor=vendor,
+        model=model,
+        os_version=os_version,
+        confidence=0.85 if vendor else 0.55,
+    )

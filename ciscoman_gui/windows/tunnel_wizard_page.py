@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 
 from ciscoman_core import actions, database as db, tunnel_wizard
 from ciscoman_core import network_utils as net
-from ciscoman_gui.workers.device_worker import DeviceWorker
+from ciscoman_gui.workers import DeviceWorker, retain_worker
 
 logger = logging.getLogger(__name__)
 
@@ -335,26 +335,32 @@ class TunnelWizardPage(QWidget):
         self.execute_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         
-        def progress_cb(done: int, total: int, result):
-            self.progress_bar.setValue(done)
-            if result.success:
-                self.results_text.append(f"✅ <b>{result.name}</b> ({result.ip}): Success<br>")
-            else:
-                self.results_text.append(f"❌ <b>{result.name}</b> ({result.ip}): {result.error}<br>")
-            
-            # Log to audit
-            cmd_str = "\n".join(cli_lines)
-            db.log_action(result.device_id, result.name, result.ip, action.id,
-                         cmd_str, "success" if result.success else "failed",
-                         result.output, result.error)
-            
-            if result.success:
-                db.mark_seen(result.device_id)
-        
-        self.worker = DeviceWorker(targets, task, progress_cb)
-        self.worker.signals.finished.connect(self.on_execution_finished)
-        self.worker.signals.error.connect(self.on_execution_error)
+        self._pending_cli = "\n".join(cli_lines)
+        self._pending_action_id = action.id
+        self.worker = retain_worker(self, DeviceWorker(targets, task))
+        self.worker.progress.connect(lambda d, t: self.progress_bar.setValue(d))
+        self.worker.result.connect(self._on_worker_result)
+        self.worker.finished.connect(self.on_execution_finished)
+        self.worker.error.connect(self.on_execution_error)
         self.worker.start()
+
+    def _on_worker_result(self, result):
+        if result.success:
+            self.results_text.append(f"✅ <b>{result.name}</b> ({result.ip}): Success<br>")
+        else:
+            self.results_text.append(f"❌ <b>{result.name}</b> ({result.ip}): {result.error}<br>")
+        try:
+            db.log_action(
+                result.device_id, result.name, result.ip,
+                getattr(self, "_pending_action_id", ""),
+                getattr(self, "_pending_cli", ""),
+                "success" if result.success else "failed",
+                result.output, result.error,
+            )
+            if result.success and result.device_id:
+                db.mark_seen(result.device_id)
+        except Exception:
+            logger.exception("audit log failed")
     
     def cancel_execution(self):
         """Cancel execution."""
@@ -368,7 +374,6 @@ class TunnelWizardPage(QWidget):
         self.progress_bar.setVisible(False)
         self.execute_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.worker = None
     
     def on_execution_error(self, error_msg: str):
         """Handle execution error."""
@@ -377,4 +382,3 @@ class TunnelWizardPage(QWidget):
         self.progress_bar.setVisible(False)
         self.execute_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.worker = None
