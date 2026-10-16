@@ -12,6 +12,13 @@ from ciscoman_core import database as db
 from ciscoman_gui.windows.login_dialog import LoginDialog
 from ciscoman_gui.windows.scanner_page import ScannerPage
 from ciscoman_gui.windows.inventory_page import InventoryPage
+from ciscoman_gui.windows.control_center_page import ControlCenterPage
+from ciscoman_gui.windows.quick_wizard_page import QuickWizardPage
+from ciscoman_gui.windows.tunnel_wizard_page import TunnelWizardPage
+from ciscoman_gui.windows.coach_page import CoachPage
+from ciscoman_gui.windows.backups_page import BackupsPage
+from ciscoman_gui.windows.audit_page import AuditPage
+from ciscoman_gui.windows.settings_page import SettingsPage
 
 logger = logging.getLogger(__name__)
 
@@ -47,20 +54,24 @@ class MainWindow(QMainWindow):
         # Create pages
         self.scanner_page = ScannerPage(self)
         self.inventory_page = InventoryPage(self)
-        
-        # Add placeholder pages for other features
-        self.create_placeholder_pages()
+        self.control_center_page = ControlCenterPage(self)
+        self.quick_wizard_page = QuickWizardPage(self)
+        self.tunnel_wizard_page = TunnelWizardPage(self)
+        self.coach_page = CoachPage(self)
+        self.backups_page = BackupsPage(self)
+        self.audit_page = AuditPage(self)
+        self.settings_page = SettingsPage(self)
         
         # Add pages to stack
-        self.stack.addWidget(self.scanner_page)      # 0
-        self.stack.addWidget(self.inventory_page)    # 1
-        self.stack.addWidget(self.placeholder_control)  # 2
-        self.stack.addWidget(self.placeholder_wizard)   # 3
-        self.stack.addWidget(self.placeholder_tunnel)   # 4
-        self.stack.addWidget(self.placeholder_coach)    # 5
-        self.stack.addWidget(self.placeholder_backups)  # 6
-        self.stack.addWidget(self.placeholder_audit)    # 7
-        self.stack.addWidget(self.placeholder_settings) # 8
+        self.stack.addWidget(self.scanner_page)         # 0
+        self.stack.addWidget(self.inventory_page)       # 1
+        self.stack.addWidget(self.control_center_page)  # 2
+        self.stack.addWidget(self.quick_wizard_page)    # 3
+        self.stack.addWidget(self.tunnel_wizard_page)   # 4
+        self.stack.addWidget(self.coach_page)           # 5
+        self.stack.addWidget(self.backups_page)         # 6
+        self.stack.addWidget(self.audit_page)           # 7
+        self.stack.addWidget(self.settings_page)        # 8
         
         # Create menu bar
         self.create_menu_bar()
@@ -75,34 +86,6 @@ class MainWindow(QMainWindow):
         self.session_timer.timeout.connect(self.check_session)
         self.session_timer.start(60000)  # Check every minute
     
-    def create_placeholder_pages(self):
-        """Create placeholder widgets for pages not yet implemented."""
-        def make_placeholder(name: str) -> QWidget:
-            widget = QWidget()
-            layout = QVBoxLayout(widget)
-            label = QLabel(f"{name}\n\n(Implementation in progress)")
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet("font-size: 18px; color: gray;")
-            layout.addWidget(label)
-            
-            note = QLabel(
-                "This feature is being migrated from the Streamlit web app.\n"
-                "The core business logic is complete in ciscoman_core/.\n"
-                "GUI components are under development."
-            )
-            note.setAlignment(Qt.AlignCenter)
-            note.setStyleSheet("color: gray;")
-            layout.addWidget(note)
-            
-            return widget
-        
-        self.placeholder_control = make_placeholder("Control Center")
-        self.placeholder_wizard = make_placeholder("Quick Wizard")
-        self.placeholder_tunnel = make_placeholder("Tunnel Wizard")
-        self.placeholder_coach = make_placeholder("Coach & Cheat Sheet")
-        self.placeholder_backups = make_placeholder("Config Backups")
-        self.placeholder_audit = make_placeholder("Audit Log")
-        self.placeholder_settings = make_placeholder("Settings")
     
     def create_menu_bar(self):
         """Create the application menu bar."""

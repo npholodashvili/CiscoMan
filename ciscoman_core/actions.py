@@ -875,6 +875,85 @@ ACTIONS: list[Action] = [
         save_after=True,
         danger=True,
     ),
+    # ---- H3C Comware ---------------------------------------------------------
+    Action(
+        id="comware_show_version",
+        name="Show Version (Comware)",
+        category="Comware",
+        kind="show",
+        platforms=["comware"],
+        explanation="H3C Comware software version, model, and uptime.",
+        template="display version",
+    ),
+    Action(
+        id="comware_show_interfaces",
+        name="Show Interfaces (Comware)",
+        category="Comware",
+        kind="show",
+        platforms=["comware"],
+        explanation="Display all interface status and statistics.",
+        template="display interface",
+    ),
+    Action(
+        id="comware_show_vlan",
+        name="Show VLAN (Comware)",
+        category="Comware",
+        kind="show",
+        platforms=["comware"],
+        explanation="Display VLAN configuration and port assignments.",
+        template="display vlan",
+    ),
+    Action(
+        id="comware_show_current",
+        name="Show Current Config (Comware)",
+        category="Comware",
+        kind="show",
+        platforms=["comware"],
+        explanation="Display the current running configuration.",
+        template="display current-configuration",
+    ),
+    Action(
+        id="comware_set_vlan",
+        name="Set Access VLAN (Comware)",
+        category="Comware",
+        kind="config",
+        platforms=["comware"],
+        explanation="Assign a port to an access VLAN on H3C Comware switches.",
+        template="""interface {{ interface }}
+port access vlan {{ vlan }}""",
+        params=[
+            Param("interface", "Interface", "interface"),
+            Param("vlan", "VLAN ID", "vlan", default="1"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    Action(
+        id="comware_set_description",
+        name="Set Port Description (Comware)",
+        category="Comware",
+        kind="config",
+        platforms=["comware"],
+        explanation="Set a description on a Comware interface.",
+        template="""interface {{ interface }}
+description {{ description }}""",
+        params=[
+            Param("interface", "Interface", "interface"),
+            Param("description", "Description", "text", placeholder="e.g. Uplink to Core"),
+        ],
+        save_after=True,
+    ),
+    Action(
+        id="comware_save_config",
+        name="Save Configuration (Comware)",
+        category="Comware",
+        kind="config",
+        platforms=["comware"],
+        explanation="Save running config to startup config (Comware uses 'save' command).",
+        template="save force",
+        save_after=False,
+    ),
+    
     # ---- Custom escape hatch -------------------------------------------------
     Action(
         id="custom_show",
@@ -922,6 +1001,7 @@ def platform_family(device_type: str) -> str:
         "cisco_xr": "xr",
         "cisco_asa": "asa",
         "cisco_s300": "ios",
+        "hp_comware": "comware",
     }
     return mapping.get(device_type, "ios")
 

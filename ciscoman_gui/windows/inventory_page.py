@@ -80,13 +80,63 @@ class InventoryPage(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to load devices:\n{e}")
     
     def add_device(self):
-        """Add a new device (show dialog)."""
-        QMessageBox.information(
-            self,
-            "Add Device",
-            "Device add dialog implementation in progress.\n\n"
-            "Use the Streamlit web app (app.py) for now, or add devices via SQL."
-        )
+        """Add a new device."""
+        from PySide6.QtWidgets import QDialog, QFormLayout, QComboBox, QDialogButtonBox
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add Device")
+        layout = QFormLayout(dialog)
+        
+        from PySide6.QtWidgets import QLineEdit, QSpinBox
+        name_input = QLineEdit()
+        ip_input = QLineEdit()
+        type_combo = QComboBox()
+        type_combo.addItems(config.SUPPORTED_DEVICE_TYPES)
+        port_spin = QSpinBox()
+        port_spin.setRange(1, 65535)
+        port_spin.setValue(22)
+        location_input = QLineEdit()
+        group_input = QLineEdit()
+        user_input = QLineEdit()
+        pw_input = QLineEdit()
+        pw_input.setEchoMode(QLineEdit.Password)
+        secret_input = QLineEdit()
+        secret_input.setEchoMode(QLineEdit.Password)
+        
+        layout.addRow("Device name:", name_input)
+        layout.addRow("IP address:", ip_input)
+        layout.addRow("Device type:", type_combo)
+        layout.addRow("SSH port:", port_spin)
+        layout.addRow("Location:", location_input)
+        layout.addRow("Group:", group_input)
+        layout.addRow("SSH username:", user_input)
+        layout.addRow("SSH password:", pw_input)
+        layout.addRow("Enable secret:", secret_input)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        
+        if dialog.exec():
+            try:
+                key = self.main_window.get_key()
+                db.add_device(
+                    key,
+                    name=name_input.text() or ip_input.text(),
+                    ip=ip_input.text(),
+                    username=user_input.text(),
+                    password=pw_input.text(),
+                    secret=secret_input.text(),
+                    device_type=type_combo.currentText(),
+                    port=port_spin.value(),
+                    location=location_input.text(),
+                    group_name=group_input.text()
+                )
+                self.load_devices()
+                QMessageBox.information(self, "Success", "Device added.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to add device:\n{e}")
     
     def add_demo_devices(self):
         """Add demo devices."""
