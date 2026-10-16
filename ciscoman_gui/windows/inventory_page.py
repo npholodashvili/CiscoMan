@@ -3,7 +3,7 @@
 import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QTableWidget, QTableWidgetItem, QMessageBox
+    QTableWidget, QTableWidgetItem, QMessageBox, QAbstractItemView,
 )
 from PySide6.QtCore import Qt
 
@@ -54,7 +54,7 @@ class InventoryPage(QWidget):
             "Location", "Group", "Username", "Source",
         ])
         self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(self.table.SelectRows)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         layout.addWidget(self.table)
         
         # Load initial data

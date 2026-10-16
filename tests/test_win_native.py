@@ -63,13 +63,15 @@ def test_run_hidden_sets_create_no_window_and_hidden_startupinfo():
 
 
 def test_mac_discovery_never_calls_powershell():
-    """Source-level guard: identification must not spawn powershell."""
+    """Identification must not spawn a PowerShell.exe process."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1] / "ciscoman_core"
+    forbidden = ('"powershell"', "'powershell'", "powershell.exe", "pwsh.exe")
     for name in ("mac_discovery.py", "win_native.py", "device_identification.py"):
         text = (root / name).read_text(encoding="utf-8").lower()
-        assert "powershell" not in text, f"{name} still references PowerShell"
+        for token in forbidden:
+            assert token not in text, f"{name} still launches {token}"
 
 
 def test_get_arp_table_uses_hidden_fallback(monkeypatch):

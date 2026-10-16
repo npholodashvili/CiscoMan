@@ -204,7 +204,9 @@ def identify_hosts(
     """Identify many hosts: one ARP read, bounded thread pool for SNMP/DNS."""
     table = win_native.get_arp_table()
     nets = win_native.local_ipv4_networks()
-    community = snmp_community or db.get_setting("snmp_community", "public")
+    community = snmp_community
+    if try_snmp and not community:
+        community = db.get_setting("snmp_community", "public")
     results: dict[str, DeviceIdentity] = {}
     total = len(ips)
 

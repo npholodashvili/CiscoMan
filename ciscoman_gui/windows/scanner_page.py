@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from ciscoman_core import config, database as db
 from ciscoman_core.device_identification import DeviceIdentity
-from ciscoman_core.win_native import icmp_echo, run_hidden
+from ciscoman_core.win_native import icmp_echo
 from ciscoman_gui.workers.device_worker import ScanWorker
 from ciscoman_gui.workers.identification_worker import IdentificationWorker
 

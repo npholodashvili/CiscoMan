@@ -565,9 +565,12 @@ def import_devices_csv(key: bytes, csv_text: str, db_path: str = config.DB_PATH)
 
 def get_setting(key: str, default: str = "", db_path: str = config.DB_PATH) -> str:
     """Get a setting value."""
-    with _connect(db_path) as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else default
+    try:
+        with _connect(db_path) as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+            return row["value"] if row else default
+    except sqlite3.OperationalError:
+        return default
 
 
 def set_setting(key: str, value: str, db_path: str = config.DB_PATH) -> None:
