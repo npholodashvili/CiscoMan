@@ -159,13 +159,22 @@ def test_control_center_loads_actions(qapp, qtbot, mocker):
 
 
 @pytest.mark.timeout(30)
-def test_scanner_page_ui(qapp, qtbot):
+def test_scanner_page_ui(qapp, qtbot, mocker):
     """Test scanner page UI elements."""
     from ciscoman_gui.windows.scanner_page import ScannerPage
     from ciscoman_gui.windows.main_window import MainWindow
     from ciscoman_core import database as db
     
     db.init_db()
+    if not db.is_initialized():
+        key = db.set_master_password("test_password_12345")
+    else:
+        key = db.verify_master_password("test_password_12345")
+    
+    # Mock the login dialog
+    mocker.patch('ciscoman_gui.windows.main_window.LoginDialog.exec', return_value=True)
+    mocker.patch('ciscoman_gui.windows.main_window.LoginDialog.get_key', return_value=key)
+    
     window = MainWindow()
     qtbot.addWidget(window)
     
