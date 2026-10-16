@@ -2,7 +2,7 @@
 
 import logging
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QRadioButton, QButtonGroup, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QRadioButton, QButtonGroup, QPushButton,
     QGroupBox, QScrollArea, QCheckBox, QSpinBox, QLineEdit, QTextEdit, QMessageBox
 )
 from PySide6.QtCore import Qt
