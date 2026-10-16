@@ -28,12 +28,14 @@ db.init_db()
 
 # --- Session helpers ----------------------------------------------------------
 
-
 def _ts(epoch: float | None) -> str:
-    if not epoch:
+    # pandas turns SQL NULL into NaN; NaN is truthy, so check explicitly
+    if epoch is None or (isinstance(epoch, float) and pd.isna(epoch)) or not epoch:
         return "-"
-    return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
-
+    try:
+        return datetime.fromtimestamp(float(epoch)).strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, OSError, OverflowError, TypeError):
+        return "-"
 
 def logout() -> None:
     for k in ("key", "login_time", "last_active"):
@@ -113,6 +115,37 @@ def page_scanner() -> None:
     timeout = col3.number_input("Timeout (s)", value=float(config.SCAN_TIMEOUT),
                                 min_value=0.1, max_value=10.0, step=0.1)
 
+    st.subheader("Default credentials (optional)")
+    with st.expander("⚠️ Auto-add with default credentials (opt-in)", expanded=False):
+        st.warning(
+            "**Security notice:** If enabled, the scanner will attempt SSH login on every "
+            "discovered host using these credentials. Only use this on trusted networks you control. "
+            "A 2-second delay is enforced between attempts."
+        )
+        enable_auto_add = st.checkbox(
+            "Enable auto-add with default credentials",
+            value=False,
+            key="scan_enable_auto_add",
+            help="Requires explicit opt-in for security"
+        )
+        d1, d2, d3, d4 = st.columns(4)
+        default_user = d1.text_input("Default SSH username", key="scan_default_user", disabled=not enable_auto_add)
+        default_pw = d2.text_input("Default SSH password", type="password", key="scan_default_pw", disabled=not enable_auto_add)
+        default_sec = d3.text_input("Default enable secret", type="password", key="scan_default_sec", disabled=not enable_auto_add)
+        default_dtype = d4.selectbox(
+            "Default device type", config.SUPPORTED_DEVICE_TYPES, key="scan_default_dtype", disabled=not enable_auto_add
+        )
+    
+    existing_locations = db.list_locations()
+    bulk_location = st.text_input(
+        "Default location",
+        value="",
+        placeholder="e.g. HQ Tbilisi",
+        help="Applied to auto-added hosts and as the default for hosts you add manually below.",
+    )
+    if existing_locations:
+        st.caption("Existing locations: " + ", ".join(existing_locations))
+
     if st.button("Start scan", type="primary"):
         prog = st.progress(0.0)
         status = st.empty()
@@ -124,44 +157,134 @@ def page_scanner() -> None:
         try:
             alive = net.scan_network(target, port=int(port), timeout=float(timeout),
                                      progress_callback=cb)
-            st.session_state["scan_results"] = alive
-            status.success(f"Done. {len(alive)} host(s) with port {port} open.")
+            auto_added: list[str] = []
+            auth_failed: list[str] = []
+
+            if enable_auto_add and default_user and default_pw and alive:
+                known_ips = {d["ip"] for d in db.list_devices()}
+                candidates = [ip for ip in alive if ip not in known_ips]
+                if candidates:
+                    status.write(
+                        f"TCP scan done ({len(alive)} open). Trying default credentials "
+                        f"on {len(candidates)} new host(s)… (2s delay between attempts)"
+                    )
+                    try_devices = [
+                        {
+                            "name": ip,
+                            "ip": ip,
+                            "username": default_user,
+                            "password": default_pw,
+                            "secret": default_sec or "",
+                            "device_type": default_dtype,
+                            "port": int(port),
+                        }
+                        for ip in candidates
+                    ]
+                    auth_prog = st.progress(0.0)
+                    auth_status = st.empty()
+
+                    def auth_cb(done: int, total: int, res: net.ExecResult) -> None:
+                        auth_prog.progress(done / total)
+                        mark = "✓" if res.success else "✗"
+                        auth_status.write(
+                            f"Auth {done}/{total} … {mark} {res.ip}"
+                            + (f" — {res.error}" if res.error else "")
+                        )
+                        # Rate limiting
+                        if done < total:
+                            time.sleep(2)
+
+                    results = net.mass_execute(
+                        try_devices, net.test_connection, progress_callback=auth_cb
+                    )
+                    key = get_key()
+                    for res in results:
+                        if res.success:
+                            db.add_device(
+                                key,
+                                name=res.ip,
+                                ip=res.ip,
+                                username=default_user,
+                                password=default_pw,
+                                secret=default_sec or "",
+                                device_type=default_dtype,
+                                port=int(port),
+                                location=bulk_location,
+                            )
+                            auto_added.append(res.ip)
+                        else:
+                            auth_failed.append(res.ip)
+
+            # Keep known + auth-failed hosts on the scanner; drop auto-added.
+            remaining = [ip for ip in alive if ip not in set(auto_added)]
+            st.session_state["scan_results"] = remaining
+            st.session_state["scan_auto_added"] = auto_added
+            st.session_state["scan_auth_failed"] = auth_failed
+
+            parts = [f"{len(alive)} host(s) with port {port} open"]
+            if auto_added:
+                parts.append(f"{len(auto_added)} added to inventory")
+            if auth_failed:
+                parts.append(f"{len(auth_failed)} need credentials below")
+            status.success("Done. " + "; ".join(parts) + ".")
         except ValueError as exc:
             st.error(f"Invalid range: {exc}")
+
+    auto_added = st.session_state.get("scan_auto_added", [])
+    if auto_added:
+        st.success(
+            f"Auto-added with default credentials: {', '.join(auto_added)}"
+        )
 
     alive = st.session_state.get("scan_results", [])
     if not alive:
         return
 
     st.subheader("Discovered hosts")
+    auth_failed = set(st.session_state.get("scan_auth_failed", []))
     known_ips = {d["ip"] for d in db.list_devices()}
-    existing_locations = db.list_locations()
-    bulk_location = st.text_input(
-        "Default location for hosts added below", value="",
-        placeholder="e.g. HQ Tbilisi",
-        help="Applied to every host you add here; you can override per host.")
-    if existing_locations:
-        st.caption("Existing locations: " + ", ".join(existing_locations))
     with st.form("add_discovered"):
-        st.caption("Fill in details and tick the hosts you want to save to inventory.")
+        st.caption(
+            "Hosts that failed default credentials (or had none) stay here. "
+            "Fill in details and tick the hosts you want to save to inventory."
+        )
         rows = []
         for ip in alive:
             already = ip in known_ips
-            with st.expander(f"{ip}" + ("  (already in inventory)" if already else ""),
-                             expanded=not already):
+            label = ip
+            if already:
+                label += "  (already in inventory)"
+            elif ip in auth_failed:
+                label += "  (default credentials failed)"
+            with st.expander(label, expanded=not already):
                 c1, c2, c3 = st.columns(3)
                 pick = c1.checkbox("Add", key=f"pick_{ip}", value=False, disabled=already)
                 name = c1.text_input("Device name", key=f"name_{ip}", value=ip)
                 location = c1.text_input("Location", key=f"loc_{ip}",
                                          value=bulk_location, placeholder="e.g. HQ Tbilisi")
-                dtype = c2.selectbox("Device type", config.SUPPORTED_DEVICE_TYPES,
-                                     key=f"type_{ip}")
+                dtype_idx = 0
+                if enable_auto_add and default_dtype in config.SUPPORTED_DEVICE_TYPES:
+                    dtype_idx = config.SUPPORTED_DEVICE_TYPES.index(default_dtype)
+                dtype = c2.selectbox(
+                    "Device type",
+                    config.SUPPORTED_DEVICE_TYPES,
+                    index=dtype_idx,
+                    key=f"type_{ip}",
+                )
                 group = c2.text_input("Group", key=f"group_{ip}",
                                       value="", placeholder="e.g. Floor-2")
-                user = c3.text_input("SSH username", key=f"user_{ip}")
-                pw = c3.text_input("SSH password", key=f"pw_{ip}", type="password")
-                sec = c3.text_input("Enable secret (optional)", key=f"sec_{ip}",
-                                    type="password")
+                # Don't pre-fill passwords for security
+                user = c3.text_input(
+                    "SSH username", key=f"user_{ip}", value=""
+                )
+                pw = c3.text_input(
+                    "SSH password", key=f"pw_{ip}", type="password",
+                    value="",
+                )
+                sec = c3.text_input(
+                    "Enable secret (optional)", key=f"sec_{ip}", type="password",
+                    value="",
+                )
                 rows.append((ip, pick, name, location, dtype, group, user, pw, sec))
         if st.form_submit_button("Save selected to inventory", type="primary"):
             added = 0
@@ -177,7 +300,6 @@ def page_scanner() -> None:
             )
             if added:
                 st.rerun()
-
 
 def page_inventory() -> None:
     st.header("🗂️ Device Inventory")
@@ -288,7 +410,6 @@ def page_inventory() -> None:
                 st.success("Updated.")
                 st.rerun()
 
-
 def _param_input(param: actions.Param, key_prefix: str):
     wkey = f"{key_prefix}_{param.key}"
     if param.kind == "int":
@@ -357,7 +478,6 @@ def page_control_center() -> None:
             st.divider()
             _render_action_ui(action, picked_ids, devices)
 
-
 _CAT_ICON = {
     "Diagnostics": "🔍",
     "Port Config": "🔌",
@@ -376,7 +496,6 @@ def _device_types_for_targets(devices: list[dict], picked_ids: list[int]) -> set
     if not picked_ids:
         return set()
     return {d["device_type"] for d in devices if d["id"] in picked_ids}
-
 
 def _render_target_picker(devices: list[dict], key_prefix: str = "tgt") -> list[int]:
     """Location/group filters + checkboxes; returns selected device ids."""
@@ -576,7 +695,6 @@ def _vlan_picker(param: actions.Param, action: actions.Action,
         "VLAN ID (manual)", min_value=1, max_value=4094,
         value=int(param.default or 1), key=f"{prefix}_manual", help=param.help,
     )
-
 
 def _interface_from_device(prefix: str, picked_ids: list, devices: list) -> str:
     candidates = [d for d in devices if d["id"] in picked_ids] or devices
