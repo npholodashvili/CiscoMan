@@ -84,6 +84,17 @@ def init_db(db_path: str = config.DB_PATH) -> None:
                 label       TEXT,
                 enc_content TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS oui_cache (
+                prefix TEXT PRIMARY KEY,
+                vendor TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         conn.execute(
@@ -98,6 +109,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(devices)").fetchall()}
     if "is_demo" not in cols:
         conn.execute("ALTER TABLE devices ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0")
+    
+    # Initialize default settings
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('online_oui_lookup', '0')")
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('snmp_community', 'public')")
     if "location" not in cols:
         conn.execute("ALTER TABLE devices ADD COLUMN location TEXT NOT NULL DEFAULT ''")
 
@@ -523,3 +538,21 @@ def import_devices_csv(key: bytes, csv_text: str, db_path: str = config.DB_PATH)
         except Exception as exc:  # noqa: BLE001 - report per-row, keep going
             errors.append(f"Row {i}: {exc}")
     return imported, errors
+
+
+# --- Settings -----------------------------------------------------------------
+
+def get_setting(key: str, default: str = "", db_path: str = config.DB_PATH) -> str:
+    """Get a setting value."""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str, db_path: str = config.DB_PATH) -> None:
+    """Set a setting value."""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
+        )

@@ -94,6 +94,34 @@ class SettingsPage(QWidget):
         
         layout.addWidget(data_group)
         
+        # Discovery Settings
+        discovery_group = QGroupBox("Device Discovery")
+        discovery_layout = QVBoxLayout(discovery_group)
+        
+        discovery_layout.addWidget(QLabel(
+            "MAC/OUI identification can use online lookup as fallback (macvendors.com API)."
+        ))
+        
+        self.online_oui_cb = QCheckBox("Enable online OUI vendor lookup (opt-in)")
+        self.online_oui_cb.toggled.connect(self.toggle_online_oui)
+        discovery_layout.addWidget(self.online_oui_cb)
+        
+        # Check current state
+        online_enabled = db.get_setting("online_oui_lookup", "0") == "1"
+        self.online_oui_cb.setChecked(online_enabled)
+        
+        discovery_layout.addWidget(QLabel("SNMP community string for device discovery:"))
+        self.snmp_community_input = QLineEdit()
+        self.snmp_community_input.setText(db.get_setting("snmp_community", "public"))
+        self.snmp_community_input.setPlaceholderText("public")
+        discovery_layout.addWidget(self.snmp_community_input)
+        
+        save_snmp_btn = QPushButton("Save SNMP Settings")
+        save_snmp_btn.clicked.connect(self.save_snmp_settings)
+        discovery_layout.addWidget(save_snmp_btn)
+        
+        layout.addWidget(discovery_group)
+        
         # Import/Export
         import_group = QGroupBox("Import / Export Inventory")
         import_layout = QVBoxLayout(import_group)
@@ -151,6 +179,25 @@ class SettingsPage(QWidget):
         except Exception as e:
             logger.error(f"Failed to change password: {e}")
             QMessageBox.critical(self, "Error", f"Failed to change password:\n{e}")
+    
+    def toggle_online_oui(self, checked: bool):
+        """Toggle online OUI lookup."""
+        try:
+            db.set_setting("online_oui_lookup", "1" if checked else "0")
+            logger.info(f"Online OUI lookup {'enabled' if checked else 'disabled'}")
+        except Exception as e:
+            logger.error(f"Failed to save online OUI setting: {e}")
+    
+    def save_snmp_settings(self):
+        """Save SNMP community string."""
+        try:
+            community = self.snmp_community_input.text().strip() or "public"
+            db.set_setting("snmp_community", community)
+            QMessageBox.information(self, "Saved", "SNMP settings saved.")
+            logger.info("SNMP settings saved")
+        except Exception as e:
+            logger.error(f"Failed to save SNMP settings: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save SNMP settings:\n{e}")
     
     def toggle_keyring(self, checked: bool):
         """Toggle Credential Manager storage."""

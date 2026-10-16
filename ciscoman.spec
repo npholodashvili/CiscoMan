@@ -18,6 +18,11 @@ datas = []
 if ntc_templates_path:
     datas.append((str(ntc_templates_path / 'templates'), 'ntc_templates/templates'))
 
+# Include OUI database
+oui_db_path = Path('ciscoman_core/oui.db')
+if oui_db_path.exists():
+    datas.append((str(oui_db_path), 'ciscoman_core'))
+
 a = Analysis(
     ['ciscoman_gui/main.py'],
     pathex=[],
@@ -36,10 +41,15 @@ a = Analysis(
         'ciscoman_core.port_panel',
         'ciscoman_core.input_validation',
         'ciscoman_core.ssh_hostkeys',
+        'ciscoman_core.mac_discovery',
+        'ciscoman_core.snmp_discovery',
+        'ciscoman_core.device_identification',
         'ntc_templates.parse',
         'textfsm',
         'keyring',
         'keyring.backends.Windows',
+        'pysnmp',
+        'requests',
     ],
     hookspath=[],
     hooksconfig={},
