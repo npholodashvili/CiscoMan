@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 
 from ciscoman_core import database as db, config
 from ciscoman_gui.workers.device_worker import ScanWorker
+from ciscoman_gui.workers.identification_worker import IdentificationWorker
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,9 @@ class ScannerPage(QWidget):
         super().__init__()
         self.main_window = main_window
         self.worker = None
+        self.identify_worker = None
         self.scan_results = []
+        self.identification_results = {}
         self.init_ui()
     
     def init_ui(self):
@@ -85,6 +88,11 @@ class ScannerPage(QWidget):
         self.cancel_btn.setEnabled(False)
         scan_layout.addWidget(self.cancel_btn)
         
+        self.identify_btn = QPushButton("Identify Scanned Devices (MAC/SNMP)")
+        self.identify_btn.clicked.connect(self.identify_devices)
+        self.identify_btn.setEnabled(False)
+        scan_layout.addWidget(self.identify_btn)
+        
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         scan_layout.addWidget(self.progress, 1)
@@ -119,10 +127,13 @@ class ScannerPage(QWidget):
         self.worker.start()
     
     def cancel_scan(self):
-        """Cancel scan."""
+        """Cancel scan or identification."""
         if self.worker:
             self.worker.cancel()
-            self.results_text.append("<br><b>Cancelling...</b><br>")
+            self.results_text.append("<br><b>Cancelling scan...</b><br>")
+        if self.identify_worker:
+            self.identify_worker.cancel()
+            self.results_text.append("<br><b>Cancelling identification...</b><br>")
     
     def on_scan_progress(self, done: int, total: int, ip: str):
         """Update scan progress."""
@@ -141,10 +152,11 @@ class ScannerPage(QWidget):
         self.progress.setVisible(False)
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+        self.identify_btn.setEnabled(len(alive) > 0)
         self.worker = None
         
         if alive:
-            self.results_text.append(f"<br><i>Add devices from Inventory page.</i>")
+            self.results_text.append(f"<br><i>Click 'Identify Scanned Devices' to discover device types via MAC/SNMP.</i>")
     
     def on_scan_error(self, error_msg: str):
         """Handle scan error."""
@@ -154,3 +166,76 @@ class ScannerPage(QWidget):
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.worker = None
+    
+    def identify_devices(self):
+        """Identify scanned devices using MAC/SNMP."""
+        if not self.scan_results:
+            return
+        
+        self.results_text.append(f"<br><b>Identifying {len(self.scan_results)} device(s)...</b><br>")
+        self.results_text.append("<i>Using ARP table, OUI lookup, and SNMP discovery</i><br>")
+        
+        self.identify_btn.setEnabled(False)
+        self.scan_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.progress.setVisible(True)
+        self.progress.setMaximum(len(self.scan_results))
+        self.progress.setValue(0)
+        
+        self.identification_results = {}
+        self.identify_worker = IdentificationWorker(self.scan_results)
+        self.identify_worker.progress.connect(self.on_identification_progress)
+        self.identify_worker.finished.connect(self.on_identification_finished)
+        self.identify_worker.error.connect(self.on_identification_error)
+        self.identify_worker.start()
+    
+    def on_identification_progress(self, done: int, total: int, ident):
+        """Handle identification progress."""
+        self.progress.setValue(done)
+        
+        if ident:
+            ip = ident.ip
+            self.identification_results[ip] = ident
+            
+            # Show result
+            vendor = ident.vendor or "Unknown"
+            model = f" {ident.model}" if ident.model else ""
+            hostname = f" ({ident.hostname})" if ident.hostname else ""
+            sources = ", ".join(ident.sources)
+            confidence = f"{ident.confidence:.0%}"
+            device_type = f" → {ident.device_type}" if ident.device_type else ""
+            
+            self.results_text.append(
+                f"✓ <b>{ip}</b>{hostname}: {vendor}{model} "
+                f"[{sources}, {confidence}]{device_type}"
+            )
+    
+    def on_identification_finished(self):
+        """Handle identification completion."""
+        identified_count = len(self.identification_results)
+        total = len(self.scan_results)
+        
+        self.results_text.append(
+            f"<br><b>Identification complete: {identified_count}/{total} device(s) identified</b><br>"
+        )
+        
+        if self.identification_results:
+            self.results_text.append(
+                "<i>Review results in Inventory, or use Control Center with identified device types.</i>"
+            )
+        
+        self.progress.setVisible(False)
+        self.scan_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self.identify_btn.setEnabled(True)
+        self.identify_worker = None
+    
+    def on_identification_error(self, error_msg: str):
+        """Handle identification error."""
+        self.results_text.append(f"<br><b>Identification error: {error_msg}</b>")
+        QMessageBox.warning(self, "Identification Error", error_msg)
+        self.progress.setVisible(False)
+        self.scan_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self.identify_btn.setEnabled(True)
+        self.identify_worker = None
