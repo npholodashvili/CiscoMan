@@ -1,5 +1,6 @@
 """GUI smoke tests using pytest-qt."""
 
+import os
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
@@ -8,12 +9,17 @@ from PySide6.QtWidgets import QApplication
 @pytest.fixture(scope="session")
 def qapp():
     """Create QApplication for tests."""
+    # Set offscreen platform for CI
+    if "CI" in os.environ or "GITHUB_ACTIONS" in os.environ:
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
     yield app
 
 
+@pytest.mark.timeout(30)
 def test_main_window_opens(qapp, qtbot):
     """Test that main window opens without crashing."""
     from ciscoman_gui.windows.main_window import MainWindow
@@ -35,6 +41,7 @@ def test_main_window_opens(qapp, qtbot):
     window.close()
 
 
+@pytest.mark.timeout(30)
 def test_login_dialog(qapp, qtbot):
     """Test login dialog can be created."""
     from ciscoman_gui.windows.login_dialog import LoginDialog
@@ -51,6 +58,7 @@ def test_login_dialog(qapp, qtbot):
     dialog.close()
 
 
+@pytest.mark.timeout(30)
 def test_all_pages_instantiate(qapp, qtbot):
     """Test that all page widgets can be instantiated."""
     from ciscoman_gui.windows.main_window import MainWindow
@@ -71,6 +79,7 @@ def test_all_pages_instantiate(qapp, qtbot):
     window.close()
 
 
+@pytest.mark.timeout(30)
 def test_demo_device_workflow(qapp, qtbot):
     """Test adding demo devices and viewing them in inventory."""
     from ciscoman_gui.windows.main_window import MainWindow
@@ -103,6 +112,7 @@ def test_demo_device_workflow(qapp, qtbot):
     window.close()
 
 
+@pytest.mark.timeout(30)
 def test_control_center_loads_actions(qapp, qtbot):
     """Test that Control Center loads action catalog."""
     from ciscoman_gui.windows.control_center_page import ControlCenterPage
@@ -128,6 +138,7 @@ def test_control_center_loads_actions(qapp, qtbot):
     window.close()
 
 
+@pytest.mark.timeout(30)
 def test_scanner_page_ui(qapp, qtbot):
     """Test scanner page UI elements."""
     from ciscoman_gui.windows.scanner_page import ScannerPage
