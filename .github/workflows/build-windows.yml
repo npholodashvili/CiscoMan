@@ -34,33 +34,15 @@ jobs:
       run: |
         python -m PyInstaller ciscoman.spec
     
-    - name: Cache Inno Setup
-      id: cache-inno
-      uses: actions/cache@v4
-      with:
-        path: C:\InnoSetup
-        key: inno-setup-6.2.2
-    
-    - name: Install Inno Setup
-      if: steps.cache-inno.outputs.cache-hit != 'true'
+    - name: Install Inno Setup via Chocolatey
       run: |
-        # Download and install Inno Setup with timeout
-        $innoUrl = "https://jrsoftware.org/download.php/is.exe"
-        $innoPath = "$env:TEMP\innosetup.exe"
-        Write-Host "Downloading Inno Setup..."
-        Invoke-WebRequest -Uri $innoUrl -OutFile $innoPath -TimeoutSec 300
-        Write-Host "Installing Inno Setup..."
-        Start-Process -FilePath $innoPath -ArgumentList "/VERYSILENT /NORESTART /DIR=C:\InnoSetup" -Wait
+        choco install innosetup -y
       shell: powershell
     
     - name: Build installer with Inno Setup
       run: |
-        if (!(Test-Path "C:\InnoSetup\ISCC.exe")) {
-          Write-Error "Inno Setup not found!"
-          exit 1
-        }
         Write-Host "Building installer..."
-        & "C:\InnoSetup\ISCC.exe" installer\ciscoman-setup.iss
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\ciscoman-setup.iss
       shell: powershell
     
     - name: Upload executable
