@@ -1,0 +1,78 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [ main, 'cursor/**' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-pinned.txt
+    
+    - name: Run tests
+      env:
+        QT_QPA_PLATFORM: offscreen
+        CI: "true"
+      run: |
+        pytest tests/ -v --tb=short
+    
+    - name: Build executable with PyInstaller
+      run: |
+        python -m PyInstaller ciscoman.spec
+
+    - name: Frozen selftest
+      run: |
+        $exe = "dist\CiscoMan\CiscoMan.exe"
+        if (!(Test-Path $exe)) { Write-Error "exe missing"; exit 1 }
+        $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru -NoNewWindow
+        Write-Host "selftest exit $($p.ExitCode)"
+        $result = "dist\CiscoMan\selftest-result.txt"
+        if (Test-Path $result) { Write-Host "--- selftest-result.txt ---"; Get-Content $result }
+        if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+        if (!(Test-Path $result) -or ((Get-Content $result -Raw) -notmatch "PASSED")) {
+          Write-Error "frozen --selftest did not write a PASSED report"
+          exit 1
+        }
+      shell: powershell
+    
+    - name: Install Inno Setup via Chocolatey
+      run: |
+        choco install innosetup -y
+      shell: powershell
+    
+    - name: Build installer with Inno Setup
+      run: |
+        Write-Host "Building installer..."
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\ciscoman-setup.iss
+      shell: powershell
+    
+    - name: Upload executable
+      uses: actions/upload-artifact@v4
+      with:
+        name: ciscoman-windows-exe
+        path: dist/CiscoMan/
+        retention-days: 30
+    
+    - name: Upload installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: ciscoman-windows-installer
+        path: installer/Output/*.exe
+        retention-days: 90
