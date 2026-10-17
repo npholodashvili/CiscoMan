@@ -70,21 +70,82 @@ def find_oui_db() -> Optional[Path]:
     return None
 
 
-def ensure_oui_db() -> Optional[Path]:
-    """Copy the bundled OUI DB into the user data dir so Settings can update it."""
-    found = find_oui_db()
-    if found is None:
-        return None
-    dest = config.get_data_dir() / "oui.db"
-    if found.resolve() != dest.resolve():
+def _oui_entry_count(path: Path) -> int:
+    """Number of vendor prefixes in an OUI database (0 if unreadable)."""
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if not dest.exists():
-                dest.write_bytes(found.read_bytes())
-                return dest
+            return int(conn.execute("SELECT COUNT(*) FROM oui").fetchone()[0])
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def _bundled_oui_db() -> Optional[Path]:
+    """The OUI database shipped with the app (not the user data copy)."""
+    candidates: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "ciscoman_core" / "oui.db")
+        candidates.append(Path(meipass) / "oui.db")
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "ciscoman_core" / "oui.db")
+        candidates.append(Path(sys.executable).resolve().parent / "oui.db")
+    candidates.append(Path(__file__).resolve().parent / "oui.db")
+    for path in candidates:
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+        except OSError:
+            continue
+    return None
+
+
+_oui_db_checked: Optional[Path] = None
+
+
+def ensure_oui_db() -> Optional[Path]:
+    """Copy the bundled OUI DB into the user data dir so Settings can update it.
+
+    The user copy is replaced whenever the bundled database has more vendor
+    prefixes, so an app upgrade with a bigger IEEE list takes effect instead
+    of being shadowed by an old copy in %LOCALAPPDATA%\\CiscoMan.
+    """
+    global _oui_db_checked
+    if _oui_db_checked is not None and _oui_db_checked.exists():
+        return _oui_db_checked
+    bundled = _bundled_oui_db()
+    dest = config.get_data_dir() / "oui.db"
+    result = find_oui_db()
+    if bundled is not None and bundled.resolve() != dest.resolve():
+        try:
+            if not dest.exists() or _oui_entry_count(dest) < _oui_entry_count(bundled):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dest.with_suffix(".tmp")
+                tmp.write_bytes(bundled.read_bytes())
+                tmp.replace(dest)
+                logger.info("Installed bundled OUI database (%d prefixes)", _oui_entry_count(dest))
+            result = dest
         except OSError as exc:
             logger.debug("Could not copy OUI db to data dir: %s", exc)
-    return found
+            result = bundled
+    _oui_db_checked = result
+    return result
+
+
+def restore_bundled_oui_db() -> Optional[Path]:
+    """Force-replace the user copy with the bundled database."""
+    global _oui_db_checked
+    bundled = _bundled_oui_db()
+    if bundled is None:
+        return None
+    dest = config.get_data_dir() / "oui.db"
+    if bundled.resolve() != dest.resolve():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(bundled.read_bytes())
+    _oui_db_checked = None
+    return dest
 
 
 def get_arp_table_windows() -> dict[str, str]:
@@ -112,7 +173,15 @@ def lookup_oui_offline(mac: str) -> Optional[str]:
 
         conn = sqlite3.connect(str(db_path))
         try:
-            row = conn.execute("SELECT vendor FROM oui WHERE prefix = ?", (oui,)).fetchone()
+            # Longest match first: MA-S (36-bit), MA-M (28-bit), then MA-L (24-bit).
+            hexmac = normalize_mac(mac).replace(":", "")
+            row = None
+            for length in (9, 7, 6):
+                row = conn.execute(
+                    "SELECT vendor FROM oui WHERE prefix = ?", (hexmac[:length],)
+                ).fetchone()
+                if row:
+                    break
         finally:
             conn.close()
         return row[0] if row else None

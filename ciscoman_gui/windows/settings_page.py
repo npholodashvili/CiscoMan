@@ -44,7 +44,7 @@ class SettingsPage(QWidget):
         scroll.setWidget(content)
         outer.addWidget(scroll)
         layout = QVBoxLayout(content)
-        layout.addWidget(QLabel("<h1>⚙️ Settings</h1>"))
+        layout.addWidget(QLabel("<h1>âš™ï¸ Settings</h1>"))
         
         # Master Password
         pw_group = QGroupBox("Change Master Password")
@@ -78,7 +78,7 @@ class SettingsPage(QWidget):
             
             cred_layout.addWidget(QLabel(
                 "Store master password in Windows Credential Manager for auto-login.\n"
-                "⚠️ Only use on a PC you control."
+                "âš ï¸ Only use on a PC you control."
             ))
             
             self.use_keyring_cb = QCheckBox("Remember master password")
@@ -226,13 +226,14 @@ class SettingsPage(QWidget):
         """Copy the packaged OUI database into the user data folder."""
         try:
             from ciscoman_core import mac_discovery
-            path = mac_discovery.ensure_oui_db()
-            if path is None:
+            dest = mac_discovery.restore_bundled_oui_db()
+            if dest is None:
                 QMessageBox.warning(self, "OUI database", "Bundled OUI database was not found.")
                 return
-            dest = config.get_data_dir() / "oui.db"
-            dest.write_bytes(path.read_bytes())
-            QMessageBox.information(self, "OUI database", f"Restored to:\n{dest}")
+            count = mac_discovery._oui_entry_count(dest)
+            QMessageBox.information(
+                self, "OUI database", f"Restored {count:,} vendor prefixes to:\n{dest}"
+            )
         except Exception as e:
             QMessageBox.critical(self, "OUI database", str(e))
 
