@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from ciscoman_core import actions, database as db, wizard
-from ciscoman_gui.workers import DeviceWorker, retain_worker
+from ciscoman_gui.workers import DeviceWorker, WorkerSlot
 from ciscoman_core import network_utils as net
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ class QuickWizardPage(QWidget):
         self.main_window = main_window
         self.selected_devices = []
         self.current_intent = None
-        self.worker = None
+        self._exec = WorkerSlot(self)
         self.device_checkboxes = {}
         self.init_ui()
     
@@ -165,14 +165,21 @@ class QuickWizardPage(QWidget):
         else:
             task = lambda d: net.send_config(d, cli_lines, save=False)
         
+        if self._exec.running:
+            return
         self.results.clear()
         self.results.append(f"Executing {self.current_intent.label} on {len(targets)} device(s)...\n")
         
-        self.worker = retain_worker(self, DeviceWorker(targets, task))
-        self.worker.result.connect(
+        worker = DeviceWorker(targets, task)
+        self._exec.bind(worker)
+        worker.result.connect(
             lambda result: self.results.append(
                 f"{'✅' if result.success else '❌'} {result.name} ({result.ip})"
             )
         )
-        self.worker.finished.connect(lambda: self.results.append("\nComplete."))
-        self.worker.start()
+        worker.finished.connect(lambda: self.results.append("\nComplete."))
+        worker.start()
+
+    @property
+    def worker(self):
+        return self._exec.get()

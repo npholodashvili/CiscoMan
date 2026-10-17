@@ -6,8 +6,8 @@ import ctypes
 import logging
 import sys
 
-from PySide6.QtGui import QColor, QFont, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QColor, QFont, QPalette, QPainter, QPen
+from PySide6.QtWidgets import QApplication, QStyleFactory, QWidget
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ QStackedWidget {{
 QPushButton#NavButton {{
     background-color: transparent;
     border: none;
-    border-radius: 6px;
+    border-radius: 0px;
     text-align: left;
     padding: 9px 12px;
     color: {TEXT_SEC};
@@ -70,7 +70,7 @@ QPushButton#NavButton:checked {{
 QGroupBox {{
     background-color: {CARD};
     border: 1px solid {STROKE};
-    border-radius: 8px;
+    border-radius: 0px;
     margin-top: 14px;
     padding: 16px 12px 12px 12px;
     font-weight: 600;
@@ -88,7 +88,7 @@ QLabel {{
 QLineEdit, QSpinBox, QComboBox, QTextEdit, QPlainTextEdit {{
     background-color: {SURFACE};
     border: 1px solid {STROKE};
-    border-radius: 6px;
+    border-radius: 0px;
     padding: 6px 10px;
     selection-background-color: {ACCENT};
     selection-color: #001018;
@@ -99,7 +99,7 @@ QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QTextEdit:focus {{
 QPushButton {{
     background-color: {SURFACE};
     border: 1px solid {STROKE};
-    border-radius: 6px;
+    border-radius: 0px;
     padding: 7px 14px;
     color: {TEXT};
 }}
@@ -131,7 +131,7 @@ QTableWidget {{
     background-color: {CARD};
     alternate-background-color: {SURFACE};
     border: 1px solid {STROKE};
-    border-radius: 8px;
+    border-radius: 0px;
     gridline-color: {STROKE};
     selection-background-color: rgba(96,205,255,0.22);
     selection-color: {TEXT};
@@ -150,25 +150,25 @@ QHeaderView::section {{
 QProgressBar {{
     background-color: {SURFACE};
     border: 1px solid {STROKE};
-    border-radius: 6px;
+    border-radius: 0px;
     text-align: center;
     height: 16px;
 }}
 QProgressBar::chunk {{
     background-color: {ACCENT};
-    border-radius: 5px;
+    border-radius: 0px;
 }}
 QTabWidget::pane {{
     border: 1px solid {STROKE};
-    border-radius: 8px;
+    border-radius: 0px;
     background: {CARD};
 }}
 QTabBar::tab {{
     background: {SURFACE};
     border: 1px solid {STROKE};
     border-bottom: none;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
+    border-top-left-radius: 0px;
+    border-top-right-radius: 0px;
     padding: 7px 14px;
     margin-right: 2px;
 }}
@@ -183,7 +183,7 @@ QScrollBar:vertical {{
 }}
 QScrollBar::handle:vertical {{
     background: #5A5A5A;
-    border-radius: 5px;
+    border-radius: 0px;
     min-height: 24px;
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
@@ -195,12 +195,12 @@ QCheckBox, QRadioButton {{
 QMenu {{
     background-color: {CARD};
     border: 1px solid {STROKE};
-    border-radius: 8px;
+    border-radius: 0px;
     padding: 4px;
 }}
 QMenu::item {{
     padding: 7px 24px 7px 16px;
-    border-radius: 4px;
+    border-radius: 0px;
 }}
 QMenu::item:selected {{
     background-color: rgba(96,205,255,0.18);
@@ -216,7 +216,7 @@ QMenuBar {{
 }}
 QMenuBar::item:selected {{
     background-color: {SURFACE};
-    border-radius: 4px;
+    border-radius: 0px;
 }}
 QToolTip {{
     background-color: {CARD};
@@ -227,12 +227,40 @@ QToolTip {{
 """
 
 
+class NavSidebar(QWidget):
+    """Sidebar with a balanced QPainter (Fusion + QSS radius leaks save frames)."""
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, False)
+            painter.save()
+            painter.fillRect(self.rect(), QColor(BG_ALT))
+            painter.setPen(QPen(QColor(STROKE)))
+            x = self.width() - 1
+            painter.drawLine(x, 0, x, self.height())
+            painter.restore()
+        finally:
+            if painter.isActive():
+                painter.end()
+
+
+def _pick_base_style() -> str:
+    keys = {k.lower(): k for k in QStyleFactory.keys()}
+    if sys.platform == "win32" and "windows11" in keys:
+        return keys["windows11"]
+    if sys.platform == "win32" and "windowsvista" in keys:
+        return keys["windowsvista"]
+    return keys.get("fusion", "Fusion")
+
+
 def apply_fluent_theme(app: QApplication) -> None:
     """Apply dark Fluent palette + QSS to the whole application."""
     font = QFont()
     font.setFamilies(["Segoe UI Variable", "Segoe UI", "Segoe UI Variable Text", "sans-serif"])
     font.setPixelSize(13)
     app.setFont(font)
+    app.setStyle(_pick_base_style())
 
     pal = QPalette()
     pal.setColor(QPalette.Window, QColor(BG))
@@ -248,7 +276,6 @@ def apply_fluent_theme(app: QApplication) -> None:
     pal.setColor(QPalette.ToolTipText, QColor(TEXT))
     pal.setColor(QPalette.PlaceholderText, QColor(TEXT_TER))
     app.setPalette(pal)
-    app.setStyle("Fusion")
     app.setStyleSheet(FLUENT_QSS)
 
 

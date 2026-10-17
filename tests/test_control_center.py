@@ -45,14 +45,26 @@ def test_control_center_demo_device(qapp, qtbot, mocker):
     cc = window.control_center_page
     cc.load_devices()
     assert cc.device_checkboxes
-    next(iter(cc.device_checkboxes.values())).setChecked(True)
+    demo_ids = {d["id"] for d in db.list_devices() if d.get("is_demo")}
+    found = False
+    for dev_id, cb in cc.device_checkboxes.items():
+        if not found and dev_id in demo_ids:
+            cb.setChecked(True)
+            found = True
+        else:
+            cb.setChecked(False)
+    assert found
     cc.on_action_selected(_pick_show_action())
     cc.execute_action()
 
     def done():
-        text = cc.results_area.toPlainText()
-        return "Success" in text or "complete" in text.lower()
+        return "Success" in cc.results_area.toPlainText()
 
+    qtbot.waitUntil(done, timeout=20000)
+    assert "Success" in cc.results_area.toPlainText()
+    qtbot.waitUntil(lambda: not cc._exec.running, timeout=5000)
+    cc.results_area.clear()
+    cc.execute_action()
     qtbot.waitUntil(done, timeout=20000)
     assert "Success" in cc.results_area.toPlainText()
     window.close()

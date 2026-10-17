@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 _fault_fh = None
 _app_ref = None
+_unhandled: list = []
+_strict_tests = False
 
 
 def install_crash_guards(log_dir: Path, app=None) -> Path:
@@ -57,6 +59,19 @@ def install_crash_guards(log_dir: Path, app=None) -> Path:
     return fault_path
 
 
+def set_strict_test_mode(enabled: bool) -> None:
+    """When True, unhandled slot exceptions are recorded for pytest to fail."""
+    global _strict_tests
+    _strict_tests = bool(enabled)
+    _unhandled.clear()
+
+
+def take_unhandled() -> list:
+    items = list(_unhandled)
+    _unhandled.clear()
+    return items
+
+
 def _format(exc_type, exc, tb) -> str:
     return "".join(traceback.format_exception(exc_type, exc, tb))
 
@@ -64,6 +79,9 @@ def _format(exc_type, exc, tb) -> str:
 def _sys_hook(exc_type, exc, tb):
     text = _format(exc_type, exc, tb)
     logger.critical("Unhandled exception:\n%s", text)
+    _unhandled.append((exc_type, exc, text))
+    if _strict_tests:
+        return
     _show_dialog(exc_type, exc, text)
 
 

@@ -86,10 +86,9 @@ def main():
         window = MainWindow()
         
         # System tray icon
-        if QSystemTrayIcon.isSystemTrayAvailable():
+        if QSystemTrayIcon.isSystemTrayAvailable() and not app_icon.isNull():
             tray_icon = QSystemTrayIcon(app)
-            if not app_icon.isNull():
-                tray_icon.setIcon(app_icon)
+            tray_icon.setIcon(app_icon)
             
             tray_menu = QMenu()
             show_action = QAction("Show", tray_menu)

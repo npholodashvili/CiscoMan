@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtGui import QAction, QIcon
 
 from ciscoman_core import database as db
-from ciscoman_gui.theme import apply_mica
+from ciscoman_gui.theme import NavSidebar, apply_mica
 from ciscoman_gui.windows.login_dialog import LoginDialog
 from ciscoman_gui.windows.scanner_page import ScannerPage
 from ciscoman_gui.windows.inventory_page import InventoryPage
@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        sidebar = QWidget()
+        sidebar = NavSidebar()
         sidebar.setObjectName("NavSidebar")
         sidebar.setFixedWidth(220)
         side_layout = QVBoxLayout(sidebar)

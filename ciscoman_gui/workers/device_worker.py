@@ -84,6 +84,7 @@ class ScanWorker(QThread):
                 self.timeout,
                 progress_callback=progress_cb,
                 host_found_callback=found_cb,
+                cancelled=lambda: self._is_cancelled,
             )
             if not self._is_cancelled:
                 self.scan_finished.emit(alive)

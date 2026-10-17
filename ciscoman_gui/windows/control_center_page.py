@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 
 from ciscoman_core import actions, database as db
 from ciscoman_core import network_utils as net
-from ciscoman_gui.workers import DeviceWorker, retain_worker
+from ciscoman_gui.workers import DeviceWorker, WorkerSlot
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class ControlCenterPage(QWidget):
         self.selected_devices = []
         self.current_action = None
         self.param_widgets = {}
-        self.worker = None
+        self._exec = WorkerSlot(self)
         self.init_ui()
     
     def init_ui(self):
@@ -298,13 +298,11 @@ class ControlCenterPage(QWidget):
             self.preview_text.setPlainText(f"Error generating preview: {e}")
     
     def _worker_busy(self) -> bool:
-        worker = self.worker
-        if worker is None:
-            return False
-        try:
-            return bool(worker.isRunning())
-        except RuntimeError:
-            return False
+        return self._exec.running
+
+    @property
+    def worker(self):
+        return self._exec.get()
 
     def update_execute_button(self):
         """Enable/disable execute button."""
@@ -375,12 +373,13 @@ class ControlCenterPage(QWidget):
         self._pending_cli = "\n".join(cli_lines) if cli_lines else "write memory"
         self._pending_action_id = self.current_action.id
 
-        self.worker = retain_worker(self, DeviceWorker(targets, task))
-        self.worker.progress.connect(self._on_worker_progress)
-        self.worker.result.connect(self._on_worker_result)
-        self.worker.finished.connect(self.on_execution_finished)
-        self.worker.error.connect(self.on_execution_error)
-        self.worker.start()
+        worker = DeviceWorker(targets, task)
+        self._exec.bind(worker)
+        worker.progress.connect(self._on_worker_progress)
+        worker.result.connect(self._on_worker_result)
+        worker.finished.connect(self.on_execution_finished)
+        worker.error.connect(self.on_execution_error)
+        worker.start()
 
     def _on_worker_progress(self, done: int, total: int):
         self.progress_bar.setMaximum(total)
@@ -406,8 +405,8 @@ class ControlCenterPage(QWidget):
     
     def cancel_execution(self):
         """Cancel running execution."""
-        if self.worker:
-            self.worker.cancel()
+        if self._exec.running:
+            self._exec.cancel()
             self.results_area.append("<br><b>Cancelling...</b><br>")
     
     def on_execution_finished(self):

@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 
 from ciscoman_core import actions, database as db, tunnel_wizard
 from ciscoman_core import network_utils as net
-from ciscoman_gui.workers import DeviceWorker, retain_worker
+from ciscoman_gui.workers import DeviceWorker, WorkerSlot
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class TunnelWizardPage(QWidget):
         self.selected_devices = []
         self.current_role = None
         self.param_widgets = {}
-        self.worker = None
+        self._exec = WorkerSlot(self)
         self.device_checkboxes = {}
         self.init_ui()
     
@@ -285,7 +285,11 @@ class TunnelWizardPage(QWidget):
             self.current_role is not None and
             len(self.selected_devices) > 0
         )
-        self.execute_btn.setEnabled(can_execute and not self.worker)
+        self.execute_btn.setEnabled(can_execute and not self._exec.running)
+
+    @property
+    def worker(self):
+        return self._exec.get()
     
     def execute_tunnel(self):
         """Execute tunnel configuration."""
@@ -337,12 +341,13 @@ class TunnelWizardPage(QWidget):
         
         self._pending_cli = "\n".join(cli_lines)
         self._pending_action_id = action.id
-        self.worker = retain_worker(self, DeviceWorker(targets, task))
-        self.worker.progress.connect(lambda d, t: self.progress_bar.setValue(d))
-        self.worker.result.connect(self._on_worker_result)
-        self.worker.finished.connect(self.on_execution_finished)
-        self.worker.error.connect(self.on_execution_error)
-        self.worker.start()
+        worker = DeviceWorker(targets, task)
+        self._exec.bind(worker)
+        worker.progress.connect(lambda d, t: self.progress_bar.setValue(d))
+        worker.result.connect(self._on_worker_result)
+        worker.finished.connect(self.on_execution_finished)
+        worker.error.connect(self.on_execution_error)
+        worker.start()
 
     def _on_worker_result(self, result):
         if result.success:
@@ -364,8 +369,8 @@ class TunnelWizardPage(QWidget):
     
     def cancel_execution(self):
         """Cancel execution."""
-        if self.worker:
-            self.worker.cancel()
+        if self._exec.running:
+            self._exec.cancel()
             self.results_text.append("<br><b>Cancelling...</b><br>")
     
     def on_execution_finished(self):

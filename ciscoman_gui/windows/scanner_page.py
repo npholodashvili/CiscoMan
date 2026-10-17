@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from ciscoman_core import config, database as db
 from ciscoman_core.device_identification import DeviceIdentity
 from ciscoman_core.win_native import icmp_echo
-from ciscoman_gui.workers import ScanWorker, IdentificationWorker, retain_worker
+from ciscoman_gui.workers import ScanWorker, IdentificationWorker, WorkerSlot
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,8 @@ class ScannerPage(QWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
-        self.worker = None
-        self.identify_worker = None
+        self._scan = WorkerSlot(self)
+        self._ident = WorkerSlot(self)
         self.scan_results: list[str] = []
         self.identification_results: dict = {}
         self._rows: dict[str, HostRow] = {}
@@ -207,18 +207,19 @@ class ScannerPage(QWidget):
         self.progress.setMaximum(100)
         self.progress.setValue(0)
 
-        self.worker = retain_worker(self, ScanWorker(target, port, timeout))
-        self.worker.progress.connect(self.on_scan_progress)
-        self.worker.host_found.connect(self.on_host_found)
-        self.worker.scan_finished.connect(self.on_scan_finished)
-        self.worker.error.connect(self.on_scan_error)
-        self.worker.start()
+        worker = ScanWorker(target, port, timeout)
+        self._scan.bind(worker)
+        worker.progress.connect(self.on_scan_progress)
+        worker.host_found.connect(self.on_host_found)
+        worker.scan_finished.connect(self.on_scan_finished)
+        worker.error.connect(self.on_scan_error)
+        worker.finished.connect(self._sync_buttons)
+        worker.start()
+        self._sync_buttons()
 
     def cancel_scan(self):
-        if self.worker:
-            self.worker.cancel()
-        if self.identify_worker:
-            self.identify_worker.cancel()
+        self._scan.cancel()
+        self._ident.cancel()
 
     def on_scan_progress(self, done: int, total: int, ip: str):
         self.progress.setMaximum(max(1, total))
@@ -241,9 +242,6 @@ class ScannerPage(QWidget):
                 self.on_host_found(ip)
         self.scan_results = list(alive)
         self.progress.setVisible(False)
-        self.scan_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
-        self.identify_btn.setEnabled(len(self._rows) > 0)
         self.table.setSortingEnabled(True)
         self.summary_label.setText(f"{len(self._rows)} host(s) with port {self.port_spin.value()} open")
         self._sync_buttons()
@@ -251,8 +249,7 @@ class ScannerPage(QWidget):
     def on_scan_error(self, error_msg: str):
         QMessageBox.critical(self, "Scan error", error_msg)
         self.progress.setVisible(False)
-        self.scan_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
+        self._sync_buttons()
 
     def refresh_switch_combo(self):
         self.switch_combo.clear()
@@ -288,14 +285,14 @@ class ScannerPage(QWidget):
             if key:
                 switch_dev = db.get_device_with_credentials(key, int(dev_id))
 
-        self.identify_worker = retain_worker(
-            self, IdentificationWorker(ips, switch_device=switch_dev)
-        )
-        self.identify_worker.progress.connect(self.on_identification_progress)
-        self.identify_worker.switch_arp_note.connect(self.summary_label.setText)
-        self.identify_worker.finished.connect(self.on_identification_finished)
-        self.identify_worker.error.connect(self.on_identification_error)
-        self.identify_worker.start()
+        worker = IdentificationWorker(ips, switch_device=switch_dev)
+        self._ident.bind(worker)
+        worker.progress.connect(self.on_identification_progress)
+        worker.switch_arp_note.connect(self.summary_label.setText)
+        worker.finished.connect(self.on_identification_finished)
+        worker.error.connect(self.on_identification_error)
+        worker.start()
+        self._sync_buttons()
 
     def on_identification_progress(self, done: int, total: int, ident):
         self.progress.setValue(done)
@@ -338,17 +335,12 @@ class ScannerPage(QWidget):
             + (f" · {remote} remote (no ARP MAC)" if remote else "")
         )
         self.progress.setVisible(False)
-        self.scan_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
-        self.identify_btn.setEnabled(True)
         self._sync_buttons()
 
     def on_identification_error(self, error_msg: str):
         QMessageBox.warning(self, "Identification error", error_msg)
         self.progress.setVisible(False)
-        self.scan_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
-        self.identify_btn.setEnabled(True)
+        self._sync_buttons()
 
     # --- table helpers --------------------------------------------------------
 
@@ -412,10 +404,21 @@ class ScannerPage(QWidget):
 
     def _sync_buttons(self):
         has_rows = self.table.rowCount() > 0
-        scan_busy = bool(self.worker and self.worker.isRunning())
-        ident_busy = bool(self.identify_worker and self.identify_worker.isRunning())
+        scan_busy = self._scan.running
+        ident_busy = self._ident.running
         self.identify_btn.setEnabled(has_rows and not scan_busy and not ident_busy)
         self.add_btn.setEnabled(bool(self._selected_ips()))
+        self.scan_btn.setEnabled(not scan_busy and not ident_busy)
+        self.cancel_btn.setEnabled(scan_busy or ident_busy)
+
+    @property
+    def worker(self):
+        """Back-compat: current scan thread, or None after it finished."""
+        return self._scan.get()
+
+    @property
+    def identify_worker(self):
+        return self._ident.get()
 
     # --- context menu / actions ----------------------------------------------
 

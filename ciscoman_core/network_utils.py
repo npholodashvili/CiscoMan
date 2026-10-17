@@ -97,6 +97,7 @@ def scan_network(
     workers: int = config.SCAN_WORKERS,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     host_found_callback: Optional[Callable[[str], None]] = None,
+    cancelled: Optional[Callable[[], bool]] = None,
 ) -> list[str]:
     """Return IPs with the given TCP port open. progress_callback(done, total, ip)."""
     targets = expand_targets(cidr_or_range)
@@ -106,9 +107,17 @@ def scan_network(
     with ThreadPoolExecutor(max_workers=max(1, min(workers, total or 1))) as pool:
         futures = {pool.submit(_tcp_probe, ip, port, timeout): ip for ip in targets}
         for fut in as_completed(futures):
+            if cancelled is not None and cancelled():
+                for pending in futures:
+                    pending.cancel()
+                break
             ip = futures[fut]
             done += 1
-            if fut.result():
+            try:
+                open_port = fut.result()
+            except Exception:
+                open_port = False
+            if open_port:
                 alive.append(ip)
                 if host_found_callback:
                     host_found_callback(ip)

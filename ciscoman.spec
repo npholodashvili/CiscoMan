@@ -56,6 +56,8 @@ a = Analysis(
         'ciscoman_core.win_native',
         'ciscoman_gui.theme',
         'ciscoman_gui.crash_guard',
+        'ciscoman_gui.workers',
+        'shiboken6',
         'ntc_templates.parse',
         'textfsm',
         'keyring',

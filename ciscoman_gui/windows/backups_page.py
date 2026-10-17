@@ -8,8 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from ciscoman_core import database as db
-from ciscoman_gui.workers.device_worker import DeviceWorker
-from ciscoman_core import network_utils as net
+from ciscoman_gui.workers import WorkerSlot
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +19,12 @@ class BackupsPage(QWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
-        self.worker = None
+        self._exec = WorkerSlot(self)
         self.init_ui()
+
+    @property
+    def worker(self):
+        return self._exec.get()
     
     def init_ui(self):
         """Initialize UI."""
