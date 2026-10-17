@@ -4,7 +4,8 @@ import logging
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QGroupBox, QMessageBox, QCheckBox, QFileDialog
+    QGroupBox, QMessageBox, QCheckBox, QFileDialog, QScrollArea, QFrame,
+    QSizePolicy
 )
 from PySide6.QtCore import Qt
 
@@ -27,8 +28,22 @@ class SettingsPage(QWidget):
         self.init_ui()
     
     def init_ui(self):
-        """Initialize UI."""
-        layout = QVBoxLayout(self)
+        """Initialize UI.
+
+        Sections live inside a scroll area so each one keeps its natural
+        height; when the window is too short the page scrolls instead of
+        squeezing labels, fields and buttons.
+        """
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+        layout = QVBoxLayout(content)
         layout.addWidget(QLabel("<h1>⚙️ Settings</h1>"))
         
         # Master Password
@@ -155,7 +170,14 @@ class SettingsPage(QWidget):
         import_layout.addWidget(import_btn)
         
         layout.addWidget(import_group)
-        
+
+        # Keep every section at its natural height and let long text wrap.
+        for group in content.findChildren(QGroupBox):
+            group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        for label in content.findChildren(QLabel):
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
         layout.addStretch()
     
     def change_password(self):
