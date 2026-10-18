@@ -1,5 +1,6 @@
 """Control Center page - full implementation."""
 
+import html
 import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget,
@@ -10,7 +11,9 @@ from PySide6.QtCore import Qt
 
 from ciscoman_core import actions, database as db
 from ciscoman_core import network_utils as net
+from ciscoman_core import port_status as ps
 from ciscoman_gui.workers import DeviceWorker, WorkerSlot
+from ciscoman_gui.widgets.port_panel import PortPanel
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,8 @@ class ControlCenterPage(QWidget):
         self.current_action = None
         self.param_widgets = {}
         self._exec = WorkerSlot(self)
+        self._ports_exec = WorkerSlot(self)
+        self._ports_family = "ios"
         self.init_ui()
     
     def init_ui(self):
@@ -51,6 +56,27 @@ class ControlCenterPage(QWidget):
         device_layout.addWidget(self.device_count_label)
         
         layout.addWidget(device_group)
+
+        # Ports view
+        ports_group = QGroupBox("Ports")
+        ports_layout = QVBoxLayout(ports_group)
+        ports_bar = QHBoxLayout()
+        ports_bar.addWidget(QLabel("Switch:"))
+        self.ports_device_combo = QComboBox()
+        self.ports_device_combo.setMinimumWidth(220)
+        ports_bar.addWidget(self.ports_device_combo)
+        self.load_ports_btn = QPushButton("Load Ports")
+        self.load_ports_btn.clicked.connect(self.load_ports)
+        ports_bar.addWidget(self.load_ports_btn)
+        clear_ports_btn = QPushButton("Clear Selection")
+        clear_ports_btn.clicked.connect(lambda: self.port_panel.face.clear_selection())
+        ports_bar.addWidget(clear_ports_btn)
+        ports_bar.addStretch()
+        ports_layout.addLayout(ports_bar)
+        self.port_panel = PortPanel()
+        self.port_panel.selectionChanged.connect(self._on_ports_selected)
+        ports_layout.addWidget(self.port_panel)
+        layout.addWidget(ports_group)
         
         # Step 2: Action selection
         action_group = QGroupBox("2. Choose Action")
@@ -189,7 +215,79 @@ class ControlCenterPage(QWidget):
                     self.selected_devices.append(device_id)
         
         self.device_count_label.setText(f"{len(self.selected_devices)} device(s) selected")
+        self._refresh_ports_combo()
         self.update_execute_button()
+
+    # --- ports ---------------------------------------------------------------
+
+    def _refresh_ports_combo(self):
+        combo = getattr(self, "ports_device_combo", None)
+        if combo is None:
+            return
+        current = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        ids = self.selected_devices or [
+            did for did in getattr(self, "device_checkboxes", {})
+        ]
+        names = {d["id"]: d for d in db.list_devices()} if ids else {}
+        for did in ids:
+            d = names.get(did)
+            if d:
+                combo.addItem(f"{d['name']} ({d['ip']})", did)
+        if current is not None:
+            idx = combo.findData(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+        self.load_ports_btn.setEnabled(combo.count() > 0 and not self._ports_exec.running)
+
+    def load_ports(self):
+        did = self.ports_device_combo.currentData()
+        if did is None or self._ports_exec.running:
+            return
+        key = self.main_window.get_key()
+        dev = db.get_device_with_credentials(key, did) if key else None
+        if not dev:
+            QMessageBox.warning(self, "Ports", "Log in first so CiscoMan can use the device's credentials.")
+            return
+        self._ports_family = actions.platform_family(dev.get("device_type") or "cisco_ios")
+        self._ports_device_name = dev.get("name") or dev["ip"]
+        self.port_panel.set_message(f"Reading ports from {self._ports_device_name}…")
+        self.load_ports_btn.setEnabled(False)
+        worker = DeviceWorker([dev], ps.fetch_ports)
+        self._ports_exec.bind(worker)
+        worker.result.connect(self._on_ports_result)
+        worker.finished.connect(lambda: self.load_ports_btn.setEnabled(True))
+        worker.error.connect(lambda msg: self.port_panel.set_message(f"Error: {msg}"))
+        worker.start()
+
+    def _on_ports_result(self, result):
+        if not result.success:
+            self.port_panel.set_ports([], self._ports_device_name)
+            self.port_panel.set_message(f"❌ {self._ports_device_name}: {result.error}")
+            return
+        ports = result.parsed or []
+        self.port_panel.set_ports(ports, self._ports_device_name)
+        if not ports:
+            self.results_area.clear()
+            self.results_area.append(
+                "<b>Couldn't read a port list from this output:</b>"
+                f"<pre>{html.escape(result.output or '')}</pre>"
+            )
+
+    def _interface_widget(self):
+        if not self.current_action:
+            return None
+        for param in self.current_action.params:
+            if param.kind == "interface":
+                return self.param_widgets.get(param.key)
+        return None
+
+    def _on_ports_selected(self, ports: list):
+        w = self._interface_widget()
+        if w is not None and hasattr(w, "setText") and ports:
+            w.setText(ps.interface_expression(ports, self._ports_family))
     
     def on_action_selected(self, action: actions.Action):
         """Handle action selection."""
@@ -237,6 +335,13 @@ class ControlCenterPage(QWidget):
         
         layout.addStretch()
         self.param_area.setWidget(widget)
+        picked = self.port_panel.selected_ports() if hasattr(self, "port_panel") else []
+        if picked:
+            self._on_ports_selected(picked)
+        for w in self.param_widgets.values():
+            sig = getattr(w, "textChanged", None)
+            if sig is not None:
+                sig.connect(lambda *_: self.update_preview())
         self.update_preview()
         self.update_execute_button()
     
@@ -387,7 +492,15 @@ class ControlCenterPage(QWidget):
 
     def _on_worker_result(self, result):
         if result.success:
-            self.results_area.append(f"✅ <b>{result.name}</b> ({result.ip}): Success<br>")
+            self.results_area.append(f"✅ <b>{result.name}</b> ({result.ip}): Success")
+            out = (result.output or "").strip()
+            if out:
+                self.results_area.append(
+                    "<pre style='font-family:Consolas,\"Courier New\",monospace;'>"
+                    f"{html.escape(out)}</pre>"
+                )
+            else:
+                self.results_area.append("<i>(the device returned no output)</i><br>")
         else:
             self.results_area.append(f"❌ <b>{result.name}</b> ({result.ip}): {result.error}<br>")
         try:
