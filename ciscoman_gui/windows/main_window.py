@@ -12,6 +12,7 @@ from PySide6.QtGui import QAction, QIcon
 
 from ciscoman_core import database as db
 from ciscoman_gui.theme import NavSidebar, apply_mica
+from ciscoman_gui.widgets.scroll_page import ScrollPage
 from ciscoman_gui.windows.login_dialog import LoginDialog
 from ciscoman_gui.windows.scanner_page import ScannerPage
 from ciscoman_gui.windows.inventory_page import InventoryPage
@@ -71,7 +72,10 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("CiscoMan")
-        self.setMinimumSize(1280, 800)
+        # Small minimum so the window fits laptops and scaled displays;
+        # pages scroll when they need more room.
+        self.setMinimumSize(900, 560)
+        self.resize(1280, 800)
         icon = app_icon()
         if not icon.isNull():
             self.setWindowIcon(icon)
@@ -126,14 +130,20 @@ class MainWindow(QMainWindow):
         self.audit_page = AuditPage(self)
         self.settings_page = SettingsPage(self)
 
-        self.stack.addWidget(self.scanner_page)
-        self.stack.addWidget(self.inventory_page)
-        self.stack.addWidget(self.control_center_page)
-        self.stack.addWidget(self.quick_wizard_page)
-        self.stack.addWidget(self.tunnel_wizard_page)
-        self.stack.addWidget(self.coach_page)
-        self.stack.addWidget(self.backups_page)
-        self.stack.addWidget(self.audit_page)
+        # Every page sits in a scroll container: if the window is smaller than
+        # the page needs, it scrolls instead of squeezing controls. Settings
+        # already manages its own scroll area.
+        for page in (
+            self.scanner_page,
+            self.inventory_page,
+            self.control_center_page,
+            self.quick_wizard_page,
+            self.tunnel_wizard_page,
+            self.coach_page,
+            self.backups_page,
+            self.audit_page,
+        ):
+            self.stack.addWidget(ScrollPage(page))
         self.stack.addWidget(self.settings_page)
         self.stack.currentChanged.connect(self._on_page_changed)
 
