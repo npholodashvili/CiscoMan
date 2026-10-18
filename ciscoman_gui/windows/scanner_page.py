@@ -459,7 +459,11 @@ class ScannerPage(QWidget):
         for ip in ips:
             row = self._rows.get(ip)
             name = (row.hostname if row and row.hostname else ip)
-            dtype = (row.device_type if row and row.device_type else "cisco_ios")
+            dtype = row.device_type if row and row.device_type else ""
+            if not dtype and row and row.vendor:
+                from ciscoman_core.device_identification import _suggest_device_type
+                dtype = _suggest_device_type(row.vendor, row.model_os, row.model_os) or ""
+            dtype = dtype or "cisco_ios"
             try:
                 db.upsert_device(
                     key,

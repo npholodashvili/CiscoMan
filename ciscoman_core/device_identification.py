@@ -96,10 +96,16 @@ def _suggest_device_type(vendor: Optional[str], model: Optional[str], os_version
         return "cisco_ios"
     if "juniper" in v:
         return "juniper_junos"
+    if "sophos" in v:
+        return "sophos_switch"
+    if "grandstream" in v:
+        return "grandstream_switch"
     if "aruba" in v:
-        return "aruba_os"
-    if "hp" in v:
-        return "hp_procurve"
+        if "cx" in m or "cx" in o:
+            return "aruba_aoscx"
+        return "aruba_osswitch"
+    if "hewlett" in v or "hp" in v.split() or v.startswith("hp"):
+        return "aruba_osswitch"
     if "h3c" in v:
         return "hp_comware"
     return None

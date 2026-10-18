@@ -109,8 +109,9 @@ SSH_TIMEOUT: int = _env_int("CISCOMAN_SSH_TIMEOUT", 20)
 KDF_ITERATIONS: int = 600_000
 _VERIFY_PLAINTEXT: bytes = b"CiscoMan::key-verification::v1"
 
-# Netmiko device types we expose in the UI. Default is cisco_ios; the rest keep
-# the tool useful as the network is upgraded / expanded.
+# Device OS types we expose in the UI (stored per device). Most are Netmiko
+# device_type names; a few (sophos_switch, grandstream_switch) are CiscoMan
+# names that map onto a Netmiko driver via NETMIKO_DRIVER below.
 SUPPORTED_DEVICE_TYPES: tuple[str, ...] = (
     "cisco_ios",
     "cisco_xe",
@@ -118,8 +119,46 @@ SUPPORTED_DEVICE_TYPES: tuple[str, ...] = (
     "cisco_xr",
     "cisco_asa",
     "cisco_s300",
+    "sophos_switch",
+    "aruba_osswitch",
+    "hp_procurve",
+    "aruba_aoscx",
     "hp_comware",  # H3C Comware support
+    "grandstream_switch",
 )
+
+# Friendly names shown in the OS dropdown.
+DEVICE_TYPE_LABELS: dict[str, str] = {
+    "cisco_ios": "Cisco IOS (Catalyst)",
+    "cisco_xe": "Cisco IOS-XE",
+    "cisco_nxos": "Cisco NX-OS (Nexus)",
+    "cisco_xr": "Cisco IOS-XR",
+    "cisco_asa": "Cisco ASA",
+    "cisco_s300": "Cisco Small Business (SG/CBS)",
+    "sophos_switch": "Sophos Switch (CS series)",
+    "aruba_osswitch": "HP / Aruba AOS-Switch (2530, 2930...)",
+    "hp_procurve": "HP ProCurve (older)",
+    "aruba_aoscx": "Aruba AOS-CX (6000/6100/6300...)",
+    "hp_comware": "HPE / H3C Comware",
+    "grandstream_switch": "Grandstream GWN switch",
+}
+
+# CiscoMan type -> Netmiko driver used for the SSH session. Sophos and
+# Grandstream switches have no Netmiko driver; their CLI prompts behave like
+# Cisco's (">", "#", "(config)#"), so the Cisco IOS driver carries the session
+# while CiscoMan sends their own command syntax.
+NETMIKO_DRIVER: dict[str, str] = {
+    "sophos_switch": "cisco_ios",
+    "grandstream_switch": "cisco_ios",
+}
+
+
+def device_type_label(device_type: str) -> str:
+    return DEVICE_TYPE_LABELS.get(device_type, device_type)
+
+
+def netmiko_driver(device_type: str) -> str:
+    return NETMIKO_DRIVER.get(device_type, device_type or "cisco_ios")
 
 
 # --- Key derivation -----------------------------------------------------------

@@ -43,7 +43,8 @@ class Action:
     use_textfsm: bool = False
     danger: bool = False
     platforms: list[str] = field(default_factory=lambda: ["all"])
-    """'all' or family tags: ios, nxos, asa, xr."""
+    """'all' (Cisco syntax) or family tags: ios, nxos, asa, xr, comware,
+    sophos, procurve, aoscx, grandstream."""
 
     def render(self, values: dict) -> list[str]:
         """Render the Jinja template into a list of CLI lines."""
@@ -954,6 +955,174 @@ description {{ description }}""",
         save_after=False,
     ),
     
+    # ---- Sophos Switch (CS series) ------------------------------------------
+    Action(
+        id="sophos_show_run",
+        name="Show Running Config (Sophos)",
+        category="Sophos",
+        kind="show",
+        platforms=["sophos"],
+        explanation="Display the current operating configuration.",
+        template="show current running-config",
+    ),
+    Action(
+        id="sophos_show_interfaces",
+        name="Show Interfaces (Sophos)",
+        category="Sophos",
+        kind="show",
+        platforms=["sophos"],
+        explanation="Interface status and configuration.",
+        template="show interfaces",
+    ),
+    Action(
+        id="sophos_show_ip_int",
+        name="Show IP Interfaces (Sophos)",
+        category="Sophos",
+        kind="show",
+        platforms=["sophos"],
+        explanation="IP interface status and configuration.",
+        template="show ip interface",
+    ),
+    Action(
+        id="sophos_set_access_vlan",
+        name="Set Access VLAN (Sophos)",
+        category="Sophos",
+        kind="config",
+        platforms=["sophos"],
+        explanation=(
+            "Make a port an untagged member of a VLAN and set its PVID, so "
+            "untagged traffic lands in that VLAN. Port format: gigabitethernet 0/2"
+        ),
+        template="""vlan {{ vlan }}
+ports add {{ interface }} untagged {{ interface }}
+exit
+interface {{ interface }}
+switchport pvid {{ vlan }}
+exit""",
+        params=[
+            Param("interface", "Port", "interface", placeholder="gigabitethernet 0/2"),
+            Param("vlan", "VLAN ID", "vlan", default="1"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+    Action(
+        id="sophos_save_config",
+        name="Save Configuration (Sophos)",
+        category="Sophos",
+        kind="show",
+        platforms=["sophos"],
+        explanation="Copy the running config to the startup config ('save').",
+        template="save",
+    ),
+
+    # ---- HP / Aruba AOS-Switch (ProCurve) -------------------------------------
+    Action(
+        id="procurve_show_run",
+        name="Show Running Config (AOS-Switch)",
+        category="HP / Aruba",
+        kind="show",
+        platforms=["procurve"],
+        explanation="Display the running configuration.",
+        template="show running-config",
+    ),
+    Action(
+        id="procurve_show_version",
+        name="Show Version (AOS-Switch)",
+        category="HP / Aruba",
+        kind="show",
+        platforms=["procurve"],
+        explanation="Firmware version and boot image.",
+        template="show version",
+    ),
+    Action(
+        id="procurve_show_int_brief",
+        name="Show Interfaces Brief (AOS-Switch)",
+        category="HP / Aruba",
+        kind="show",
+        platforms=["procurve"],
+        explanation="Port status, speed and duplex.",
+        template="show interfaces brief",
+    ),
+    Action(
+        id="procurve_show_vlans",
+        name="Show VLANs (AOS-Switch)",
+        category="HP / Aruba",
+        kind="show",
+        platforms=["procurve"],
+        explanation="Configured VLANs.",
+        template="show vlans",
+    ),
+    Action(
+        id="procurve_set_access_vlan",
+        name="Set Access VLAN (AOS-Switch)",
+        category="HP / Aruba",
+        kind="config",
+        platforms=["procurve"],
+        explanation="Make a port an untagged member of a VLAN. Port format: 5 or 1/5",
+        template="vlan {{ vlan }} untagged {{ interface }}",
+        params=[
+            Param("interface", "Port", "interface", placeholder="5"),
+            Param("vlan", "VLAN ID", "vlan", default="1"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+
+    # ---- Aruba AOS-CX ---------------------------------------------------------
+    Action(
+        id="aoscx_show_run",
+        name="Show Running Config (AOS-CX)",
+        category="HP / Aruba",
+        kind="show",
+        platforms=["aoscx"],
+        explanation="Display the running configuration.",
+        template="show running-config",
+    ),
+    Action(
+        id="aoscx_show_version",
+        name="Show Version (AOS-CX)",
+        category="HP / Aruba",
+        kind="show",
+        platforms=["aoscx"],
+        explanation="Firmware version.",
+        template="show version",
+    ),
+    Action(
+        id="aoscx_show_int_brief",
+        name="Show Interface Brief (AOS-CX)",
+        category="HP / Aruba",
+        kind="show",
+        platforms=["aoscx"],
+        explanation="Port status, VLAN and speed.",
+        template="show interface brief",
+    ),
+    Action(
+        id="aoscx_show_vlan",
+        name="Show VLANs (AOS-CX)",
+        category="HP / Aruba",
+        kind="show",
+        platforms=["aoscx"],
+        explanation="Configured VLANs.",
+        template="show vlan",
+    ),
+    Action(
+        id="aoscx_set_access_vlan",
+        name="Set Access VLAN (AOS-CX)",
+        category="HP / Aruba",
+        kind="config",
+        platforms=["aoscx"],
+        explanation="Put a port in access mode on a VLAN. Port format: 1/1/5",
+        template="""interface {{ interface }}
+vlan access {{ vlan }}""",
+        params=[
+            Param("interface", "Port", "interface", placeholder="1/1/5"),
+            Param("vlan", "VLAN ID", "vlan", default="1"),
+        ],
+        save_after=True,
+        danger=True,
+    ),
+
     # ---- Custom escape hatch -------------------------------------------------
     Action(
         id="custom_show",
@@ -1002,14 +1171,31 @@ def platform_family(device_type: str) -> str:
         "cisco_asa": "asa",
         "cisco_s300": "ios",
         "hp_comware": "comware",
+        "sophos_switch": "sophos",
+        "aruba_osswitch": "procurve",
+        "aruba_os": "procurve",
+        "aruba_procurve": "procurve",
+        "hp_procurve": "procurve",
+        "aruba_aoscx": "aoscx",
+        "grandstream_switch": "grandstream",
     }
-    return mapping.get(device_type, "ios")
+    return mapping.get(device_type or "cisco_ios", "other")
+
+
+# Families whose CLI is not Cisco-like. The generic catalog actions (which are
+# written in Cisco IOS syntax) are hidden for them; they only get actions
+# tagged for their family plus the Custom commands.
+NON_CISCO_FAMILIES = {"sophos", "procurve", "aoscx", "grandstream", "other"}
+UNIVERSAL_ACTIONS = {"custom_show", "custom_config"}
 
 
 def action_visible(action: Action, device_types: set[str]) -> bool:
-    if "all" in action.platforms:
-        return True
     families = {platform_family(dt) for dt in device_types}
+    if action.id in UNIVERSAL_ACTIONS:
+        return True
+    if "all" in action.platforms:
+        # Cisco-syntax action: only when every selected device speaks it.
+        return not (families & NON_CISCO_FAMILIES)
     return bool(families & set(action.platforms))
 
 

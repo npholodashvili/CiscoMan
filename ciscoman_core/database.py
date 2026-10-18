@@ -257,8 +257,13 @@ def add_device(
         return int(cur.lastrowid)
 
 
-def upsert_device(key: bytes, db_path: str = config.DB_PATH, **fields) -> int:
-    """Insert or, on (ip, port) conflict, update an existing device."""
+def upsert_device(
+    key: bytes, db_path: str = config.DB_PATH, keep_existing_type: bool = True, **fields
+) -> int:
+    """Insert or, on (ip, port) conflict, update an existing device.
+
+    By default an existing device keeps its OS type, so re-adding a host from
+    the scanner never overwrites an OS the user picked by hand."""
     existing = None
     with _connect(db_path) as conn:
         existing = conn.execute(
@@ -266,6 +271,8 @@ def upsert_device(key: bytes, db_path: str = config.DB_PATH, **fields) -> int:
             (fields["ip"], int(fields.get("port", config.DEFAULT_SSH_PORT))),
         ).fetchone()
     if existing:
+        if keep_existing_type:
+            fields = {k: v for k, v in fields.items() if k != "device_type"}
         update_device(key, existing["id"], db_path=db_path, **fields)
         return int(existing["id"])
     allowed = {
@@ -551,6 +558,7 @@ def import_devices_csv(key: bytes, csv_text: str, db_path: str = config.DB_PATH)
             upsert_device(
                 key,
                 db_path=db_path,
+                keep_existing_type=False,
                 name=row.get("name") or row["ip"],
                 ip=row["ip"].strip(),
                 username=row["username"].strip(),

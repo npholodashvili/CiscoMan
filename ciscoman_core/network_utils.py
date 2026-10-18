@@ -142,7 +142,7 @@ class ExecResult:
 
 def _build_params(device: dict) -> dict:
     params = {
-        "device_type": device.get("device_type", "cisco_ios"),
+        "device_type": config.netmiko_driver(device.get("device_type") or "cisco_ios"),
         "host": device["ip"],
         "username": device["username"],
         "password": device.get("password", ""),
@@ -173,8 +173,11 @@ def _prepare_session(conn, device: dict) -> None:
     try:
         if fam == "asa":
             conn.send_command("terminal pager 0", read_timeout=30)
-        else:
+        elif fam == "comware":
+            conn.send_command("screen-length disable", read_timeout=30)
+        elif fam in ("ios", "nxos", "xr"):
             conn.send_command("terminal length 0", read_timeout=30)
+        # Other platforms: their Netmiko driver already disables paging.
     except Exception:  # noqa: BLE001
         pass
 
@@ -186,7 +189,36 @@ def interface_status_command(device: dict) -> tuple[str, bool]:
         return "show interface status", True
     if fam == "asa":
         return "show interface ip brief", False
+    if fam == "comware":
+        return "display interface brief", False
+    if fam == "procurve":
+        return "show interfaces brief", False
+    if fam == "aoscx":
+        return "show interface brief", False
+    if fam in ("sophos", "grandstream"):
+        return "show interfaces", False
     return "show interfaces status", True
+
+
+# Command that prints the running configuration, per platform family.
+_RUNNING_CONFIG_CMD = {
+    "sophos": "show current running-config",
+    "comware": "display current-configuration",
+}
+
+
+def running_config_command(device: dict) -> str:
+    return _RUNNING_CONFIG_CMD.get(_platform_family(device), "show running-config")
+
+
+def _save_config(conn, device: dict) -> str:
+    """Save running config the way this platform expects."""
+    fam = _platform_family(device)
+    if fam == "sophos":
+        return conn.send_command_timing("save", read_timeout=60)
+    if fam == "comware":
+        return conn.send_command_timing("save force", read_timeout=60)
+    return conn.save_config()
 
 
 def test_connection(device: dict) -> ExecResult:
@@ -264,7 +296,7 @@ def send_config(device: dict, config_lines: Iterable[str], save: bool = False) -
             _prepare_session(conn, device)
             out = conn.send_config_set(lines)
             if save:
-                out += "\n" + conn.save_config()
+                out += "\n" + _save_config(conn, device)
             return ExecResult(device.get("id"), name, device["ip"], True, output=out)
     except NetmikoAuthenticationException:
         return ExecResult(device.get("id"), name, device["ip"], False, error="Authentication failed")
@@ -299,7 +331,7 @@ def _demo_show(device: dict, name: str, cmds: list[str], use_textfsm: bool) -> E
 
 
 def get_running_config(device: dict) -> ExecResult:
-    res = run_show_commands(device, ["show running-config"])
+    res = run_show_commands(device, [running_config_command(device)])
     if res.success:
         # Strip the leading "# show running-config" header we add.
         res.output = res.output.split("\n", 1)[-1] if res.output.startswith("#") else res.output
