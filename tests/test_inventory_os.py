@@ -40,7 +40,7 @@ def test_every_supported_type_has_label_and_driver():
     from netmiko.ssh_dispatcher import CLASS_MAPPER
     for t in config.SUPPORTED_DEVICE_TYPES:
         assert config.device_type_label(t) != t
-        assert config.netmiko_driver(t) in CLASS_MAPPER
+        assert net._available_driver(t) in CLASS_MAPPER
 
 
 def test_non_cisco_devices_do_not_get_cisco_commands():

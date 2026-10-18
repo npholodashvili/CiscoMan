@@ -140,9 +140,20 @@ class ExecResult:
     parsed: Optional[list] = field(default=None)
 
 
+def _available_driver(device_type: str) -> str:
+    """Netmiko driver for this OS; falls back to the Cisco IOS driver when the
+    installed Netmiko is too old to know it (e.g. aruba_aoscx before 4.4)."""
+    driver = config.netmiko_driver(device_type)
+    try:
+        from netmiko.ssh_dispatcher import CLASS_MAPPER
+    except Exception:  # noqa: BLE001
+        return driver
+    return driver if driver in CLASS_MAPPER else "cisco_ios"
+
+
 def _build_params(device: dict) -> dict:
     params = {
-        "device_type": config.netmiko_driver(device.get("device_type") or "cisco_ios"),
+        "device_type": _available_driver(device.get("device_type") or "cisco_ios"),
         "host": device["ip"],
         "username": device["username"],
         "password": device.get("password", ""),
@@ -177,6 +188,8 @@ def _prepare_session(conn, device: dict) -> None:
             conn.send_command("screen-length disable", read_timeout=30)
         elif fam in ("ios", "nxos", "xr"):
             conn.send_command("terminal length 0", read_timeout=30)
+        elif fam == "aoscx":
+            conn.send_command("no page", read_timeout=30)
         # Other platforms: their Netmiko driver already disables paging.
     except Exception:  # noqa: BLE001
         pass
